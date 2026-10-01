@@ -1,0 +1,192 @@
+asys: workflow/1
+name: OS development
+description: >-
+  Architecture, then test plan, then a cycle of planned, implemented, tested
+  and reviewed jobs, then a plenary verdict. Failures go to a recovery agent
+  that resumes the right step or asks a human.
+start: architecture
+steps:
+  architecture:
+    description: Specification written by a goal and debated by the architecture Senate
+    repeat:
+      step:
+        call: architecture.yaml
+        input:
+          request: ${request}
+          feedback: >-
+            Previous architecture review: ${if architecture = null then "none" else architecture.reason}
+            Plenary rejection: ${if plenary_confirm != null and plenary_confirm.verdict = "rejected" then plenary.reason + " Operator: " + (if plenary_confirm.comments = null then "none" else string(plenary_confirm.comments)) else "none"}
+            Operator guidance: ${if escalate != null and escalate.resume = "architecture" then (if escalate.comments = null then "none" else string(escalate.comments)) else "none"}
+            Recovery note: ${if recover != null and recover.resume = "architecture" then recover.guidance else "none"}
+      until: ${step.approved}
+      max: 3
+    result: last
+    on_error: recover
+    next: architecture_route
+  architecture_route:
+    switch:
+      - when: architecture.approved = true
+        next: test_plan
+    default: escalate
+
+  test_plan:
+    description: Test plan written by a goal and debated by the test-plan Senate
+    repeat:
+      step:
+        call: test-plan.yaml
+        input:
+          request: ${request}
+          feedback: >-
+            Previous test-plan review: ${if test_plan = null then "none" else test_plan.reason}
+            Operator guidance: ${if escalate != null and escalate.resume = "test_plan" then (if escalate.comments = null then "none" else string(escalate.comments)) else "none"}
+            Recovery note: ${if recover != null and recover.resume = "test_plan" then recover.guidance else "none"}
+      until: ${step.approved}
+      max: 3
+    result: last
+    on_error: recover
+    next: test_plan_route
+  test_plan_route:
+    switch:
+      - when: test_plan.approved = true
+        next: cycle
+    default: escalate
+
+  cycle:
+    description: Plan the next job, implement, test and review it; repeat until the plan is finished
+    repeat:
+      step:
+        call: cycle.yaml
+        input:
+          request: ${request}
+          previous: >-
+            ${if cycle = null then "None: this is the first cycle." else "Job " + cycle.job_id + " (" + cycle.title + "): approved = " + (if cycle.approved = null then "none" else string(cycle.approved)) + ". " + (if cycle.reason = null then "none" else string(cycle.reason))}
+            Operator guidance: ${if escalate != null and escalate.resume = "cycle" then (if escalate.comments = null then "none" else string(escalate.comments)) else "none"}
+            Recovery note: ${if recover != null and recover.resume = "cycle" then recover.guidance else "none"}
+          plenary: >-
+            ${if plenary_confirm != null and plenary_confirm.verdict = "revise" then plenary.reason + " Bugs: " + (if plenary.bugs = null then "none" else string(plenary.bugs)) + " Operator: " + (if plenary_confirm.comments = null then "none" else string(plenary_confirm.comments)) else "none"}
+      until: ${step.project_complete}
+      max: 200
+    result: last
+    on_error: recover
+    next: cycle_route
+  cycle_route:
+    switch:
+      - when: cycle.project_complete = true
+        next: plenary
+    default: escalate
+
+  plenary:
+    run: senate-plenary
+    description: Plenary session dissects the whole project
+    input:
+      request: >-
+        Plenary session: dissect the whole project and give its verdict.
+
+        Project request:
+        ${request}
+
+        Examine the specification (docs/spec/architecture.md), the test plan
+        (docs/spec/test-plan.md), every job in docs/jobs/ with its design and
+        test report, and the system itself: build it and run its tests.
+        Decide one verdict: "approved" (the project meets its specification),
+        "revise" (sound, but with bugs or gaps to fix in further work cycles)
+        or "rejected" (fundamentally wrong; the architecture must be redone).
+
+        The Princeps writes the verdict, its reasons and every bug or gap
+        found to docs/plenary/report.md.
+
+        Return verdict (string: approved, revise or rejected), reason
+        (string) and bugs (array of strings, each a concrete bug or gap),
+        alongside final and exception.
+    result: last
+    on_error: recover
+    next: plenary_confirm
+  plenary_confirm:
+    run: human
+    description: You confirm or override the plenary verdict
+    input:
+      title: Plenary verdict
+      prompt: >-
+        The plenary Senate's verdict is "${plenary.verdict}". Approved ends
+        the run. Revise sends the bugs and your comments back into the work
+        cycle as the next jobs. Rejected sends the plenary's reasons and your
+        comments back to the architecture stage. Which verdict do you confirm?
+      summary: ${plenary.final}
+      files:
+        - {path: docs/plenary/report.md, label: Plenary report}
+        - {path: docs/spec/architecture.md, label: Specification}
+        - {path: docs/spec/test-plan.md, label: Test plan}
+      form: forms/plenary.json
+    result: last
+    on_error: recover
+    next: plenary_route
+  plenary_route:
+    switch:
+      - when: plenary_confirm.verdict = "approved"
+        next: accepted
+      - when: plenary_confirm.verdict = "revise"
+        next: cycle
+    default: architecture
+
+  recover:
+    run: flow-recovery
+    description: Recovery agent decides where the flow resumes after a failure
+    input:
+      request: >-
+        A step of the OS development flow failed or could not finish. Its
+        recorded result:
+        ${last}
+
+        Project request:
+        ${request}
+
+        Decide where the flow resumes. Return resume (string: architecture,
+        test_plan, cycle, plenary, escalate or abort) and guidance (string:
+        what the resumed step must know or do differently), alongside final
+        and exception.
+    on_error: escalate
+    next: recover_route
+  recover_route:
+    switch:
+      - when: recover.resume = "architecture"
+        next: architecture
+      - when: recover.resume = "test_plan"
+        next: test_plan
+      - when: recover.resume = "cycle"
+        next: cycle
+      - when: recover.resume = "plenary"
+        next: plenary
+      - when: recover.resume = "abort"
+        next: aborted
+    default: escalate
+
+  escalate:
+    run: human
+    description: A human decides where the flow continues
+    input:
+      title: The OS development flow needs a decision
+      prompt: >-
+        The flow cannot continue on its own: a step failed and the recovery
+        agent escalated it, or a stage did not get approval within its
+        allowed rounds. Choose where the flow continues, with guidance for
+        that step, or abort the run.
+      summary: >-
+        Latest step result: ${last}
+        Recovery agent: ${if recover = null then "not consulted" else recover.final}
+      form: forms/escalation.json
+    on_error: aborted
+    next: escalate_route
+  escalate_route:
+    switch:
+      - when: escalate.resume = "architecture"
+        next: architecture
+      - when: escalate.resume = "test_plan"
+        next: test_plan
+      - when: escalate.resume = "cycle"
+        next: cycle
+      - when: escalate.resume = "plenary"
+        next: plenary
+    default: aborted
+
+  accepted: {end: Project approved}
+  aborted: {end: Aborted}

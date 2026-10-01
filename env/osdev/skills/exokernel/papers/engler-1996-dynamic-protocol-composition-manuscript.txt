@@ -1,0 +1,676 @@
+       Design and Implementation of a Modular, Flexible, and Fast System for
+                        Dynamic Protocol Composition
+                                            D. R. Engler, D. A. Wallach, and M. F. Kaashoek
+                                                M.I.T. Laboratory for Computer Science
+                                                    Cambridge, MA 02139, U.S.A
+                                           fengler, kerr, kaashoekg@lcs.mit.edu
+
+
+
+
+Abstract                                                                          protocols are the units of modularity in networking. To pro-
+                                                                                  vide higher level functionality than is provided by any single
+Distributed systems must communicate. To communicate at all                       protocol they are frequently composed together into protocol
+requires high-level protocols be built with manageable com-                       stacks.
+plexity. To communicate well requires protocols efficient both                         Protocol composition is used for three main reasons. First,
+in design and implementation. The ASH system provides mech-                       it provides portability by encapsulating hardware dependen-
+anisms to address both of these needs. To manage complexity,                      cies in a low-level protocol, which can then be composed with
+it provides a simple interface that allows protocols to be dy-                    higher level, medium-independent protocols. Second, it man-
+namically composed in a modular manner. As a result, the                          ages the high complexity of modern high-performance proto-
+complexity of building a high-level messaging service is re-                      cols by building up services from individual existing protocols
+duced since it can be built from multiple, independent pieces                     via composition rather than reimplementation. This concern
+at runtime. To provide efficiency, the ASH interface is designed                  is not academic: implementation of most network protocols
+so that the message processing steps of each protocol (such                       is complex and error-prone (e.g., the specification of TCP is
+as checksumming, byteswapping, encryption, etc.) can be dy-                       more than eighty pages long [10]). Without composition the
+namically integrated into a single specialized loop that touches                  creation of high-level network protocols becomes an ambitious
+each byte of the message at most once. The ASH system is the                      endeavor rather than a handful of function calls. Third, com-
+first to dynamically integrate the data processing elements of                    position allows new protocols to be used with old networking
+each protocol. This ability is crucial since without it dynamic                   software by encapsulating them in older protocols, thereby
+protocol composition cannot be efficient.                                         providing existing routers and transport software with packets
+     This paper presents the design and implementation of the                     that they can understand (and, more importantly, that they will
+ASH system. It is interesting because it uses modern compilation                  not throw away as “garbage”). This use is important because
+techniques to eliminate the runtime overhead of modularity. To                    network systems are distributed and, as a result, messages may
+make the system efficient we have had to solve problems rang-                     travel through many different administrative domains, across
+ing from theoretical graph algorithms, to language design, to                     many different network types and through many potentially
+determining the most efficient way to access unaligned mem-                       outdated switching nodes. Without encapsulation, it would be
+ory, and designing efficient and portable methods of generat-                     difficult to communicate with other machines.
+ing executable code at runtime. As a result of careful design                          Traditionally, protocol composition has mainly been static
+and the the use of dynamic code generation to specialize data                     in that compositions are determined at compilation time (the
+processing paths, the ASH system provides performance that is                     most famous static composition being the TCP/IP stack). While
+comparable to (and in some situations significantly better than)                  this approach works for simple cases, it has weaknesses in the
+hand-coded, hard-wired protocol implementations.                                  face of demanding clients or of rich networking environments
+     The ASH system has been integrated into the Aegis operat-                    since many characteristics of the network (is it an Ethernet,
+ing system, and runs on both Ethernet and DEC AN2 networks.                       a token ring, or ATM; is the link lossy, reliable, etc.) and
+A standalone version of the ASH system runs on SPARC, MIPS,                       of client needs (should throughput or latency be optimized
+and Alpha processors. The system itself will be publically re-                    for, what protocol services are needed or redundant?) are not
+leased in the near future.                                                        known until runtime.
+                                                                                       Since static composition leads to exponential code growth
+                                                                                  if every conceivable network protocol and, more compellingly,
+1 Introduction                                                                    every protocol implementation is composed with every other,
+                                                                                  implementors have begun to defer composition until runtime.
+Data is sent across a computer network using a network pro-                       Runtime (or “dynamic”) composition can be used to combine
+tocol. Protocols provide a more palatable interface than the                      only those protocol stacks that are needed. Unsurprisingly, the
+raw network hardware (such as the provision of reliable mes-                      flexibility of this approach has come with a cost. The most
+saging). Analogous to procedures in algol-derived languages,                      serious cost is that the different layers of the system are not
+     This work was supported in part by the Advanced Research Projects Agency     integrated.
+under Contract N00014-94-1-0985. The views and conclusions contained in this           Additionally, integration across the protocol/application
+document are those of the authors and should not be interpreted as representing   boundary has been poor in most systems. For example, hand
+the official policies, either expressed or implied, of the U.S. government.
+                                                                                  integration typically combines only protocols (for example, a
+memory copy and checksum in TCP/IP) and does not inte-
+grate application-specific data manipulation operations, with                                    Application
+the result that crossing the protocol/application boundary typ-
+ically suffers multiple data traversals. Additionally, the model
+of application and network has been mainly a passive one: ap-                                       TCP
+plications pre-bind buffers to store messages into; if the buffer
+to store the message into depends on the message contents, or
+the application has not installed enough bound buffers, the data                                     IP
+is copied multiple times, obviously hurting performance.
+    We have developed a system that provides efficient protocol
+composition across both protocol and application boundaries                                       link level
+and, due to its event model, allows applications to actively
+participate in message processing (both in determining where
+to place the message and in supplying operations to perform
+on it). The system has a simple but powerful interface that has                 Figure 1: Protocol composition stack.
+been designed in tandem with a dynamic integration facility
+that dynamically compiles multiple data processing steps into
+a single specialized memory loop.                                   protocol stack itself and are propagated downward until either
+    Since integration occurs at runtime, protocol integration       the link level is reached or until a lower level of the stack
+does not require source compilation. Practical benefits of this     consumes them (e.g., as might happen on slow links where
+fact are that: (1) protocols can be written in any language,        small messages are consolidated into larger ones).
+(2) protocols can be compiled separately (or even not have               There are three main actions a layer can perform on mes-
+any source code available on the system), and (3) protocols         sage data: consume, augment, and deliver. Logically, consume
+can even be dynamically linked as their implementations are         destructively copies portions of the message; this ability can
+upgraded.                                                           be used to extract a protocol level’s header(s). augment ap-
+    One interesting problem we had to solve is that that cur-       pends or prepends data to the message stream; this ability can
+rent compilers do not consistently optimize networking idioms       be used to add headers or to reassemble fragments. Finally,
+well. Therefore, while the protocols themselves can be writ-        deliver controls the actual movement of data between levels: it
+ten in any language, the data manipulation routines are written     propagates a given number of bytes of the message to the next
+in a machine-independent language specialized for network-          layer in the stack (“next” is determined by context: on sends
+ing operations such as checksumming, bytewapping, memory            it is the lower layer, on receives the upper). Since deliver and
+copies, and unaligned memory accesses. As a result, we have         augment are always coupled, we have simplified the interface
+been able to achieve performance beyond what is obtainable          by unifying them into a single function.
+from current implementations of C.                                       The central efficiency problem with modular protocol de-
+    This paper describes the design and implementation issues       sign is that separation of protocol levels prevents integration of
+of the ASH system in detail. We are publishing a complementary      each protocol’s data manipulations [3]. For example, consider
+paper on the use of ASHs [15].                                      a two-layer stack consisting of TCP and an RPC protocol that
+    Section 2 gives an overview of the ASH interface. Section 3     guarantees correct byte order. When a message is received and
+discusses challenges in the ASH implementation, and Section 4       delivered to TCP, the TCP layer will touch the entire message
+gives details in how processing layers are dynamically inte-        to perform a checksum and then give the message to the RPC
+grated. The ASH operating system interface is described in          protocol which may then need to byteswap the entire message.
+Section 5 and experiments are presented in Section 6. Finally,      Multiple message traversals are expensive given the current
+related work is discussed in Section 7 and we conclude in           imbalance between memory and CPU speeds. The ASH sys-
+Section 8.                                                          tem provides support to allow the message to be touched only
+                                                                    once. Each operation takes an optional argument that specifies
+                                                                    a pipe to apply during actual data manipulation. Using this
+2 System Overview                                                   mechanism, the data processing steps of each level can be inte-
+                                                                    grated into a single pass over memory. As messages propagate
+The ASH system provides support for dynamic, modular net-           between levels, the pipes to be applied to them (e.g., check-
+work protocol composition; after protocols have been com-           sum, byteswap) are recorded; when the data is finally moved or
+posed, the ASH system uses on-the-fly code generation to inte-      touched, these steps are applied in a single pass over memory.
+grate them into an efficient data path.                             To eliminate interpretation overhead, the code to perform this
+    At a high-level, protocol composition consists of creating      operation is dynamically generated at runtime, consolidating
+“protocol stacks”. Each layer in the stack is linked to the layer   all operations into a single integrated routine, and cached on
+immediately above and and the layer immediately below it.           the path that created it.
+Oriented vertically, the low end of the stack is the link-layer          This message processing interface is simple, powerful, and
+protocol, and the high end the application (see Figure 1). When     efficient. Simplicity results from careful design: we have re-
+a message for a protocol stack is received, the ASH system          duced message processing to two main functions (consume
+delivers the message to the lowest protocol layer. Propagation      and deliver) and augmented them with a simple mechanism to
+from one layer in the stack to the next is terminated when          compose message processing steps. Fragmentation, reassem-
+the top of the stack is reached or when a layer decides that        bly, header addition and extraction can all be expressed using
+it has completely consumed the message. This upward path            the same small interface. Power is derived from providing sup-
+from link level to application level is called the receive path.    port for arbitrary message actions: supporting fragmentation,
+The send path from application down to link level is similar,       reassembly, adding headers to the beginning and end of the
+with the difference that messages originate from within the         message, coalescing and splitting multiple messages into and
+out of a single incoming message, etc. Efficiency is derived         by returning an error in turn to the level that invoked it). After
+from the careful application of dynamic code generation in           the message is processed, abort or commit are invoked. During
+order to integrate all message processing steps into a single        phase one, the ASH system tracks which handlers to call by
+specialized loop.                                                    recording the protocols invoked during message processing.
+     Table 1 shows the ASH interface in more detail. consume         Every time a protocol is activated its handlers are (logically)
+and deliver provide a rich yet simple set of potential message       enqueued on a list. When phase two is initiated, these handlers
+manipulations. For example, deliver can be used to append            are called, in FIFO order. A commit handler is called unless: (1)
+fragments to the beginning or end of the message in a manner         a lower-level protocol failed, or (2) a lower-level commit han-
+identical to how it is used to append headers; similarly it can      dler failed, in which case the abort is propagated upwards (by
+be used to deliver multiple application data units from a single     invoking the abort handlers of bodies affected by the failure).
+message by simply using multiple invocations. initiate provides      Higher level protocol body failures are synchronously propa-
+the capability for any layer to initiate a message send.             gated down; a level receiving notification of a failure above
+     An example of how to use this interface to express a sim-       can choose to abort (propagating the failure down further) or
+plified version of UDP is provided in Figure 2. For clarity, our     buffer the data for later and succeed (stopping the chain of
+example only shows the receive path, and does not include the        failure propagation).
+code necessary to handle the UDP pseudo-header. It consists              The send path is affected by incomplete information as
+of three parts: a main body, a commit handler, and an abort          well. The problem is one of circularity: before a message header
+handler. The main body first initializes the accumulation reg-       can be attached to the outgoing message it requires a checksum
+ister for the checksum to zero. It then uses consume to read the     to be computed for the entire message, but in order to minimize
+UDP header and remove it from the data stream, performing            copies this computation cannot be done until the message is
+a checksum in the process. If nothing has gone wrong, it then        moved to its network buffer destination, which cannot happen
+checks the UDP header to find out if a UDP checksum was sent         until the header is prepended, etc. To solve this problem we
+with the message. If none was sent, it uses deliver to forward up    break the send path into two phases (similar to the receive path
+the rest of the data stream with no further data manipulations. If   except that there is no abort handler) and introduce reserved
+there was a checksum, it forwards up the rest of the data stream     headers. During deliver on the send path, protocol levels can
+using deliver with a checksum pipe, then checks the checksum         reserve space for their headers by providing a special pointer
+if the deliver completed successfully. If any problems happen        value (defined by ASH RESERVE) as an argument to deliver.
+at any time during the processing of the message, this simple        deliver checks for this value and, if encountered, reserves the
+ash aborts. The commit and abort handlers will be discussed          given number of bytes. When the message is consumed (either
+later.                                                               by the link layer or a lower level protocol) the send commits
+                                                                     associated with each participating protocol are called in FIFO
+                                                                     order. This ensures that layered checksums will work correctly,
+3 Ash Implementation Overview                                        since these headers must be filled in from the highest layer to
+                                                                     the lowest. Send commits must fill in any reserved headers that
+This section examines four implementation challenges.                were allocated.
+                                                                         This methodology requires that data be fed to pipes out
+3.1 The travails of incomplete information                           of order (since headers are applied after the main message).
+                                                                     To determine if pipes can handle this behavior, each pipe is
+The overall efficiency goal of the ASH system is to process mes-     annotated with a flag indicating whether it is commutative: if
+sages with minimal overhead. To process messages efficiently         any pipe to be applied is not commutative, the data is copied
+requires that messages be sent and received with a single copy       to a temporary buffer until the headers are ready, after that, the
+between application data structures and network buffers (or,         entire message is then copied, in order, to the final destination.
+if message buffers can be mapped into user-space [5], with a
+single “touch” of the data). This goal presents a problem in that
+while messages are processed with only local information (i.e.,      3.2 On-demand pipe generation
+incomplete knowledge of the entire message), many protocol           The number of possible pipe compositions grows exponentially
+decisions require global information.                                with the number of pipes on a given path. This growth is further
+    This problem manifests itself on the receive path in that        increased both since messages can originate and terminate at
+whole-message computations such as a checksum cannot be              any level of the protocol stack and any given level can have
+performed by low-level layers before propagating messages to         an arbitrary number of possible pipes it is allowed to supply.
+higher levels. As a result, higher levels can consume a message      This growth is a practical concern for protocol stacks of even
+before they are assured of message correctness. ASH uses two-        modest size.
+phase message processing to handle this problem: phase one               However, while the number of potential pipe compositions
+propagates the message up the protocol stack, phase two either       may be exponential, the number of actual compositions that
+commits or aborts. This model has similarities to that of Abbott     are used are not. To exploit this fact, the ASH system integrates
+and Peterson [1]; the main difference is that it is simpler.         pipes on demand. The system starts with no integrated copy
+    As can be seen in Figure 2, the receive path of each pro-        routines. When a set of composed pipes is to be applied, the ASH
+tocol is comprised of three procedures: a body procedure that        system checks to see if the corresponding integrated processing
+does the main processing during phase one, and two handlers,         loop exists, if not it creates it. While this approach is space
+abort (called if a lower-level aborts) and commit (called if all     efficient, it also is time efficient since only those paths that are
+lower-levels succeed). The body procedure can consume the            used are actually created dynamically.
+message or, if necessary, defer processing until the message is
+certified. The body procedure can fail, synchronously return-
+ing an error code to the level that invoked it via deliver; this
+level is then responsible for handling the failure (potentially
+    
+/ This is the main body of the receive ash for UDP. /                     
+    
+/ nbytes is the size of the message. /              
+    
+/ Note that the required checksum over the IP pseudoheader has /                       
+    
+/ been omitted for clarity.
+                                    
+int udp receive ash(void ash data, int nbytes) {
+   struct udp udp hdr;
+   int sum, left;
+
+            
+        / Initialize the checksum accumulation register which will be used in pipe. /                   
+        p export(CKSUM PIPE, pipe cksum, 0);
+
+                                            
+        if(nbytes<sizeof(struct udp)) / Udp got too few bytes, abort now. /                
+            return(ASH ABORT);
+
+            
+        / Slurp the UDP header into a local variable (udp hdr) /                  
+            
+        / In the process, run the checksum pipe on the header. /                   
+            
+        / If it fails, return abort. /  
+        if(consume(&udp hdr, sizeof(struct udp), CKSUM PIPE) < 0)
+                 
+            / Should not happen since we have enough bytes /                  
+            return(ASH ABORT);
+
+        left = nbytes − sizeof(struct udp);
+
+            
+        / If there is a checksum in the UDP header, /                 
+            
+        / must finish the checksum computation at this point. /               
+            
+        / If the header checksum value is 0, no checksum was sent by the remote side. /                         
+        if(udp hdr.cksum != 0) {
+
+                 
+                / Deliver rest of message to higher level layer, using the checksum pipe. /                 
+                if (deliver(left, CKSUM PIPE) < 0) return(ASH ABORT);
+
+                 
+                / Read the checksum accumulation register to find out the final result /            
+                 
+                / of the checksum now that the deliver has finished. /             
+                sum = p import(CKSUM PIPE, pipe cksum);
+
+                 
+                / Fold 32−bit sum to 16 bits and invert (part of the checksum computation). /                   
+                sum = (unsigned short)˜inet fold(sum);
+
+                         
+                if(sum) / Should have summed to zero. Checksum failed. Abort.                  /
+                    return(ASH ABORT);
+        }
+                     
+        else { / No checksum to check /         
+                 
+                / Deliver rest of message with no pipe. /         
+                if (deliver(left, ASH SPECIAL PIPE)<0) return(ASH ABORT);
+        }
+
+            
+        / Ash succeeded! /      
+        return(ASH SUCCESS);
+}
+
+    
+/ This is the UDP receive commit handler. /                   
+                                               
+int udp rcommit(void ash data) { / Pass on success /                      
+   return(ASH SUCCESS);
+}
+
+    
+/ This is the UDP receive abort handler. /                
+                                               
+void udp rabort(void ash data) { / No cleanup to do; pass on failure. /                        
+   return(ASH ABORT);
+}
+
+                                                        Figure 2: Example ASH for UDP.
+   Operation                                                                Description
+   int consume(void *dst, int nbytes, int pipe id)                          Consume nbytes of message by copying it to dst while applying pipe
+                                                                            pipe id. Used to consume headers, fragments, and application data.
+                                                                            Derivatives of this function are provided to copy or skip over data.
+   int deliver([ void *pre hdr, unsigned pre bytes, pipe id pre id, ]       Deliver nbytes of the incoming byte stream to the next protocol (on
+               unsigned nbytes, pipe id pipe id                             send, this is the protocol immediately below the current protocol;
+               [, void *post hdr, unsigned post bytes, pipe id post id ])   on receive it is the protocol above). The pipe pipe id will be applied
+                                                                            when the data is touched. Optional arguments append data to the front
+                                                                            (pre hdr) or back (post hdr) of the message; each of these pieces
+                                                                            of data can be manipulated by their own pipes. deliver causes the
+                                                                            protocol’s final code to be pushed. (deliver also has a more complex
+                                                                            form that takes a list of data elements to append to the message.)
+   int initiate(void *data, int nbytes)                                     Initiate a message send of nbytes of data. Causes the current proto-
+                                                                            col’s send path to be invoked.
+
+                                                               Table 1: ASH Interface
+
+
+3.3 Fast pipe path computation
+Protocol levels are allowed to select from among any number                       This sum will serve as a dense index into a table containing
+of different pipes to apply to a message. The problem this                    specialized copy routines. If the routine we want is not there,
+raises is efficiently determining what sequence of pipes should               the path can be re-derived in a simple, efficient manner by
+be applied when a message is finally consumed. A simple (but                  working backwards from highest numbered level to greatest as
+slow) solution would, for each piece of data, accumulate a list               follows:
+of pipes applied to it. When the message is consumed, this
+list would be used to derive the required copy routine. Such                         % Given a path summation, reconstruct the path
+a methodology is far too inefficient. Ideally we would like to                       % traversed to get to it. The set of
+record the path we took through the protocol stack with a single                     % pipes along this path is put on a list and then
+integer operation (e.g., add) that maps to a dense set of integers                   % dynamically compiled.
+corresponding to each possible set of pipes (density is required                     procedure recover path(protocol, path id)
+so we can use the path id as a table index).                                            pstack = ();    % will hold the list of pipes to apply
+     This problem is reducible to a fast graph algorithm by
+considering each protocol level as a node and the pipes of a                            % start from the highest numbered level.
+level as edges connecting one node to another. The problem                              for protocol = top to bottom do
+we want to solve can be stated as follows:                                                 pipelist = protocol−>pipelist;
+      Given a leveled graph, label its edges so that any                                   % foreach p = largest pipe to smallest
+      path starting at any node and ending at any node                                     for i = pipelist−>size to 0 do
+      that passes through each level at most once can
+      be labeled with a unique identifier in the range
+                                                                                                                        
+                                                                                              if pipelist[i].path id path id
+                                                                                                  push(pstack, pipelist[i]);
+      0::n 1 where n is the number of possible paths                                                path id = path id − pipelist[i].path id;
+      through the graph.                                                                            continue;
+Such a path corresponds to the path a message takes through                              % return the stack of pipes.
+the protocol stack. The following algorithm gives a labeling of                          return pstack;
+the stack that can be used to accumulate the path that we took
+from one level to another by simply adding the unique pipe id                     A key property of this algorithm is that traveling from
+for a given path:                                                             one level to another requires only a single integer addition.
+                                                                              Importantly, the only message buffer modifications we must
+      % Given a protocol stack where each level of the                        do are when the message buffer is created: since all buffers
+      % stack has a list of pipes associated with it                          pass through the same pipe (as they are sent from one level to
+      % numbered 0 .. m, create a new labeling s.t. the                       the next) their initial value can be added to the sum accumulated
+      % addition of paths from any two nodes that pass                        as the message traverses the protocol stack. When the message
+      % through each protocol node is unique and dense.                       is to be consumed, we simply add the final sum to its initial
+      % Note that the identity function is pipe id 0.                         sum (the initial sum is the pipe id of the level that it was first
+      procedure label pipes(protocol)                                         created with minus the path sum computed up to that level).
+           % max holds the maximum sum we have seen
+           max = 0;
+           % traverse the protocol stack bottom up                            3.4 Interface tricks
+           for protocol = bottom to top do
+                 pipelist = protocol−>pipelist;                               The ASH interface has been designed to allow simple but pow-
+                 for i = 0 to pipelist−>size do                               erful message manipulations to be done without copying over-
+                                                      
+                        pipelist[i].pipe id = i (max + 1);                    head. Two of the useful interface features provided are that
+                                                                              fragmentation and reassembly can be performed using the same
+                 % the new max
+                 max = max + pipelist[i].pipe id;                             interface and actions used for more “normal” operations (such
+as appending and extracting headers). Fragmentation is im-           more importantly, provides a mechanism with which complex
+plemented by consuming a given fragment and storing it in a          systems can be constructed without fear of expense.
+temporary message buffer; reassembly is simply a matter of
+glueing this buffer to any other portions of the fragment during
+a deliver to a higher-level. Similar techniques can be used to       4.2 Pipe overview
+coalesce multiple messages into a single large message.              To make the ASH system efficient we have had to design ef-
+    Another example of simplicity that can be used to provide        ficient and portable methods of generating executable code at
+powerful features is the ability to produce multiple higher-level    runtime.
+messages from a single low level message. This ability means              As in Abbott and Peterson [1], each protocol layer nego-
+that multiple outstanding receive operations can be active at a      tiation step for data manipulation is written as a transfer from
+single time. To support this, we have wrapped the global state       register to register, and is organized as a “pipe” manipulating
+each path requires in a context that can be cheaply switched on      data as it streams through. This methodology is similar to Ab-
+each activation.                                                     bott and Peterson [1] with the important distinction that our
+    Messages can be initiated by any ASH level. This ability         system allows dynamic protocol composition, whereas theirs
+allows low-level layers to send acknowledgments and retrans-         is done statically. To allow modular coupling, each pipe has an
+missions as necessary. Similarly, any layer can absorb mes-          input and output gauge associated with it (e.g., 8 bits, 32 bits,
+sages sent by higher layers in order to buffer them, etc.            etc.). This allows pipes to be coupled in a distributed fashion;
+                                                                     the ASH system performs conversions between the required
+                                                                     sizes. For example, a checksum function may take in and gen-
+4 Dynamic ILP Implementation                                         erate 16 bit words, while an encryption pipe may require 32 bit
+The main technical contribution is the support the ASH system        words. To allow the checksum’s output to be streamed through
+provides for dynamic integrated layer processing. This section       the encryption pipe, it is aggregated into a single register. The
+looks at the issues we have had to solve in order to make            composed functions are compiled by our system into a tightly
+dynamic ILP work well.                                               integrated streaming engine which is encoded into a specialized
+                                                                     data copying loop.
+                                                                          The pipes for ASHs are written in a variant of VCODE [6],
+4.1 A digression on dynamic code generation                          which is a low-level extension language designed to be simple
+                                                                     to implement and efficient both in terms of the cost of code
+Dynamic code generation is the generation of executable code         generation and in terms of the computational performance of
+at runtime. While becoming a widely cited curiosity, it is still     its generated code. The VCODE system was built based on our
+used by only a minority of implementors. To give the reader          early experience with the ASH system.
+background in the important intuitions behind it, we present              The VCODE interface is that of an extended RISC ma-
+two of the uses we have put it to: (1) to eliminate interpretation   chine: instructions are low-level register-to-register operations.
+overhead and (2) to reconcile modularity with performance by         A sample pipe to compute the Internet checksum is provided
+compiling away indirection.                                          in Figure 3. Each pipe is allocated in the context of a pipe
+    Dynamic code generation is compilation. Like static com-         list (pl in the figure) and given a pipe identifier that is used to
+pilation, dynamic compilation can eliminate interpretation. In-      name the pipe during use. Additionally, pipes are associated
+terpretation has been given fairly heavy handed semantics; in        with a number of attributes controlling the input and output
+this context it simply means that data structure values deter-       size (a pipe’s “gauge”), whether the pipe is allowed to trans-
+mine control flow.                                                   form its input (P MOD), and whether the pipe is commutative
+    Typically, a data structure changes slowly in comparison         (i.e., whether it can perform operations on message data out of
+to how many times it is used (initialize a matrix once, then         order). These attributes govern how a given pipe is composed
+perform many passes over it). Furthermore, by definition, the        with other pipes (e.g., can it be reordered, and the expected
+control path the data structure determines could be specialized      input and output sizes) and how it can be used (e.g., can it pro-
+to the given data.                                                   cess message headers after message data in order to compute
+    These are simple observations. However, their applicability      message checksums).
+is extraordinarily wide. Every non-trivial program interprets. If         Since pipe operations are written in terms of portable as-
+specialization can be performed quickly, and insight into how        sembly language instructions, pipes are charged with allocating
+it can be applied can be found, every existing program could         those registers they need and are given control over register
+be made to go faster.                                                class. The two register classes are temporary and persistent.
+    Systems programming is especially amenable to dynamic            Temporary registers are scratch registers that are not saved
+code generation: systems functions are commonly used by              across pipe invocations. Persistent registers are saved across
+many different application classes (e.g., printf is called by        pipe invocations; they are used, for example, as accumulators
+almost every C program). To meet the demands of different            during checksum computations. The values of persistent reg-
+applications, systems software is very general. What general-        isters can be imported and exported from the main protocol
+ity means in this context is that it uses much interpretation.       code. Export is used to initialize a register before use, import
+    Traditionally, modularity has been expensive: compile-           to obtain a register’s value (e.g., to determine if a checksum
+time or runtime boundaries have been expensive to cross both         succeeded).
+in terms of the number of cycles required to implement the                The special register p inputr is reserved to indicate the
+crossing and in the truncation of information that they forced       pipe’s input. In the given example, the pipe consumes a 32-bit
+(and subsequent elimination of possible optimizations).              word of data (using the p input32 instruction), adds its value to
+    The use of dynamic code generation allows modularity             the running checksum total (using the p cksum32 instruction),
+to be eliminated by compiling away hard boundaries, thereby          and then outputs it. Since the pipe does not modify its input we
+tightly integrating the formerly separated pieces of code. This      associate it with the P NO MOD attribute. The pipe compiler
+ability both improves performance dramatically and, perhaps
+          
+      / Create a pipe to compute the Internet checksum; insert it on the pipe list. /            
+                                                                          
+      static void mk cksum pipe(int pipe id, struct pipel pl, reg t pipe cksum) {
+             /
+               Start allocating a pipe: inet checksum works with 16 bits and is both commutative
+               and non−modifying (i.e., it does not alter its input).
+              /
+             pipe lambda(pl, pipe id, P GAUGE32, P COMMUTATIVE P NO MOD);         j
+                    
+                   / Allocate an accumulator register (preserved across pipe invocations. /           
+                   pipe cksum = p getreg(pl, pipe id, P VAR);
+
+                                             
+                   p input32(p inputr); / Get input word /            
+                                                             
+                   p cksum32( pipe cksum, p inputr); / Add input word to running checksum computation. /                      
+                                              
+                   p output32(p inputr); / Output word /          
+                              
+              pipe end(); / done. /     
+      }
+
+                                                        Figure 3: Example pipe.
+
+
+can use this information to reorder pipes as necessary to reduce          languages to implement pipes: if pipes are integrated together
+the number of gauge conversions required. Additionally, since             recklessly and the variables they use exceed the number of
+the Internet checksum computation is commutative, it can be               registers of the underlying machine, ILP can actually be sub-
+applied to the data in any order. To indicate this attribute we           stantially slower than non-ILP code since each loop iteration
+use the P COMMUTATIVE flag.                                               will involve spilling and restoring some number of registers.
+                                                                          VCODE was designed to solve precisely this sort of problem:
+                                                                          VCODE provides a portable way to determine when the ma-
+4.3 Language issues                                                       chine’s registers are exhausted. At this point, the ASH system
+Current compilers do not optimize networking idioms well.                 is able to split the copy operation into multiple passes.
+This is mainly due to the fact that there are no clear idiomatic
+way of expressing common networking operations such as                    4.4 Implementation mechanism
+checksumming, bytewapping, memory copies, and unaligned
+memory accesses from within even a low-level language such                Internally each pipe is represented by a collection of persistent
+as C. To remedy this situation, we have extended the VCODE                and temporary register names, an index into a global register
+system (to which the pipe language is compiled to) to include             table (used to translate the local register names into a global
+common networking operations. Importantly, the VCODE sys-                 per-message register context) and an array of pipe instructions.
+tem on which ASH is built is low-level enough that further                Given a list of pipes to integrate, we perform the following
+extensions can be done by clients of the ASH system with little           operations:
+performance impact.
+    Clear expression of common data manipulation opera-                        1. Traverse all pipes, accumulating both the maximum num-
+tions allows us to profitably tune the ASH system to exploit                      ber of temporary registers needed by any pipe, and the
+architecture-specific features. For example, the x86 machine                      total number of persistent registers needed by all pipes.
+has a byteswap instruction, and the Alpha has a rich set of                    2. Allocate the required temporary and persistent registers.
+byte manipulation routines. Unaligned access instructions are                     If the underlying machine runs out of registers, split the
+provided on the MIPS, ALPHA and x86 (useful for copying                           loop into multiple passes.
+unaligned message data) and add-with-carry instructions are
+provided on the SPARC and x86 architectures (these instruc-                    3. Load the values of all persistent registers held in the
+tions can be used to efficiently compute the Internet checksum                    per-message context into their allocated registers.
+a word at a time). Isolating machine-specific details to the ASH
+and VCODE systems allow clients to reap the benefits of aggres-                4. Generate an unrolled memory access loop: pass each
+sive specialization while retaining both portability and ease of                  loaded value from one pipe to the next. If the gauges
+use.                                                                              between the pipes differ, perform any necessary conver-
+    A practical result of such specialization is that we have been                sions.
+able to achieve performance beyond what is obtainable from
+current implementations of systems programming languages                       5. Store the persistent registers into the per-message con-
+such as C.                                                                        text.
+    A crucial aspect of the VCODE system is that it gives ac-                 As described above, pipe compilation is built on top of
+cess to the underlying hardware at a lower level than a systems           the VCODE system. We exploit VCODE’s low-level interface to
+language such as C, while still maintaining portability. As de-           craft specialized memory copy loops that, in many cases, can
+scribed above, we have used this control to provide an extended           exceed the performance obtainable from high-level languages.
+set of network specific idioms. This control also has a number            Three examples of how pipe compilation exploits VCODE’s
+of other advantages. An example is the register spill problem             low level interface are: (1) use of unaligned memory opera-
+that plagues static ILP systems due to their use of high-level            tions to make unaligned copies efficient, (2) determination of
+whether memory loads are done using an index register al-
+lowing message indexing to be implemented efficiently, and                 manipulation                  hand-integrated           ASH
+(3) exploiting machine support for “double loads” to load two              byteswap                           8.07                 8.42
+registers at a time. The high degree of control VCODE gives                checksum                           15.8                 17.2
+(while maintaining portability!) means, again, that the quality            checksum+byteswap                  6.51                 6.71
+of pipe-generated code can surpass that possible from a high-
+level language. Finally, on machines for which it is profitable,   Table 2: Throughput measured on the Decstation 5000/200.
+the pipe system can violate VCODE abstractions to generate         Units are megabytes/second.
+customized architecture-specific copy loops. Importantly, the
+memory copy generator’s complexity is isolated to a few hun-
+dred lines of code in the pipe compiler, but is leveraged by               manipulation                  hand-integrated           ASH
+all clients of the ASH system, eliminating the tedious and error           byteswap                           19.2                 23.5
+prone process of repeatedly implementing unrolled memory                   checksum                           30.1                 63.5
+operation loops. As the number of steps to integrate increases,            checksum+byteswap                  16.0                 20.7
+this benefit is non-trivial.
+                                                                   Table 3: Throughput measured on the SPARCstation 5. Units
+5    Integration With Operating System                             are megabytes/second.
+
+After a message arrives, it it passed into the ASH associated
+with the message, if one exists. If the ASH aborts, the message    Note that the cost of generating a pipe was under a millisec-
+is saved and passed on to higher levels later.                     ond. We expect this time to decrease significantly as our system
+    The message send function takes a pointer to be set when       gains maturity.
+the message buffers sent along that path have all been freed and        Table 3 shows the same experiments as Table 2, only for a
+the ASH can reclaim the storage. When a message is going to be     SPARCstation 5. This experiment demonstrates that automat-
+sent from an ASH to a network device, the device is called with    ically integrated pipes using VCODE can provide substantial
+the number of bytes to be delivered, and how many segments         performance benefits over hand-integrating functions. There
+the bytes are in. The device can can either return a pointer to    are two main reasons for the the dramatic superiority of the
+                                                                   ASH system integration over the hand-crafted loops; both rea-
+a buffer to copy the message into, or nil indicating that it can
+be left in place. When the message is ready, the device will       sons result from the close ties to the hardware that the ASH
+then be called again, this time with the message. A network        system can exploit. First, the SPARC provides memory in-
+device such as the Ethernet, which can only send a message         structions to move two integer registers at a time to and from
+from specific network buffers, would always provide a buffer       memory. The C compiler we compared against did not exploit
+at the reservation time. On the other hand, a device such as       this ability and hence performed twice as many memory opera-
+the DEC AN2, which can gather-DMA a message with great             tions per iteration. The second performance boost was the fact
+flexibility, would probably leave the data inplace. One example    that the SPARC provides a carry bit that can be used to cheaply
+where it might not leave the message in place was if it were       compute the Internet checksum 32-bits at a time. The C ver-
+very small but segmented into many buffers, since the cost         sion of this code had no portable way to access this bit and so
+of gather DMA-ing is greater than the cost of copying small        was forced to use boolean expressions to detect overflow. The
+messages.                                                          combination of these two features allows the ASH to achieve a
+                                                                   throughput rate of more than double that of the hand-integrated
+                                                                   C code. Similar benefits are accrued whenever there are con-
+6 Experiments                                                      flicts between the expressiveness of high-level languages and
+                                                                   the capabilities of the underlying hardware. It is important to
+In this section, we examine how ASHs can be exploited to           emphasize that the ASH system exploits such features invisi-
+achieve good throughput and data transfer latency. Many of         bly to the programmer, who merely sees data manipulations as
+our experiments are influenced by Clark and Tennenhouse [3].       relatively straight-forward (and portable) pipe compositions.
+We use micro-benchmarks to measure the base performance
+of individual ASH operations. This methodology allows us to
+isolate the ASH system from artifacts of specific architectural    6.2 A multiple layer ASH
+and OS implementations.                                            We perform a simple experiment to determine the overhead
+                                                                   added by dynamic integrated layer processing with the ASH
+                                                                   system. We built a three-layer protocol stack, consisting of the
+6.1 Data manipulation costs                                        IP protocol, the UDP protocol, and a “ping” application. The
+We perform experiments to show that data manipulation using        IP and UDP layers are the standard Internet protocols, and
+pipes is as fast or faster than hand-integrated data routines.     between them involve one checksum over the data per send
+    Table 2 shows that the integrated routines generated by the    or receive1 . The application receives the data sent to it into
+ASH system are as fast or even slightly faster than that gener-    a buffer of its own choice, decrements a four-byte counter in
+ated by gcc for the equivalent manipulations hand-integrated       the first four bytes, and sends a new message directly out of
+in C. We measured the time to repeatedly perform a com-            that buffer back down through the UDP and IP layers. We call
+bined byteswap with memcpy, checksum with memcpy, and              this experiment ping. Optionally, the application byteswaps
+byteswap checksum with memcpy on 4096 bytes of data, both          the entire message both while receiving and sending it; this
+with and without pipes, on a Decstation 5000/200. We were          version of the experiment is called ping-bswap. We wrote
+careful to make sure that the hand-integrated and the pipe-            1
+                                                                         We perform the full Internet IP and UDP protocols except for IP fragmen-
+generated routines are unrolled by the same amount (4 words).      tation and reassembly.
+        experiment         nbytes     non-ASH      ASH                        Machine                OS     Roundtrip latency
+        ping                    4       22.2      94.6                     DEC5000/125       ExOS/ASH                     259
+                                                                           DEC5000/125             ExOS                   320
+        ping                4096        876        587                     DEC5000/125             Ultrix                3400
+        ping-bswap          4096       1630       1360                     DEC5000/200      Ultrix/FRPC                   340
+
+Table 4: ASH system costs measured on the Decstation                Table 5: Roundtrip latency of a 60-byte packet over Ethernet
+5000/200. Units are in pings/microsecond (each ping is the          using ExOS with ASHs, ExOS without ASHs, Ultrix, and FRPC;
+time to completely traverse up the three levels to receive the      times are in microseconds.
+message then back down again to send the next one).
+
+                                                                    UDP/IP packet 4096 times between two processes in user-
+two versions of these experiments: one using ASHs and one           space on DECstation5000/125s. The FRPC numbers are taken
+without. The one without does no integration of the checksums,      from the literature [12]. They were measured on a DECsta-
+memory copies and (if necessary) byte swaps.                        tion5000/200, which is approximately 1.2 times faster than a
+    The dynamically integrated ping and ping-bswap ap-              DECstation5000/125 on SPECint92.
+plications are not possible in any other existing system. The           The message processing at each node consisted of reading
+price paid for this integration is modest: as shown in the first    the 60-byte message, incrementing the counter, copying the
+line of Table 4, the time to perform the ping experiment with       new value and a precomputed message header into a transmis-
+only four bytes of data (i.e. just the counter) is only 70 mi-      sion buffer, and then sending the reply message. In comparison
+croseconds more than the version that does not use ASHs. We         to a complete application-level implementation, ASHs save 61
+believe most of this difference to be constant overhead, pri-       microseconds.
+marily due to the fact that all namespaces in the ASH system            Despite being measured on a slower machine, ExOS/ASH
+are local rather than global (e.g., the names of pipes are local    is 81 microseconds faster than a high-performance imple-
+to a given level, as are the names of its registers rather than     mentation of RPC for Ultrix (FRPC) running on DECsta-
+residing in a global name space). As a result every ASH manip-      tion5000/200s and using a specialized transport protocol [12].
+ulation involves a fair number of translations in order to map      In fact, ExOS/ASH is only 6 microseconds slower than the
+local names to global ones. We are changing this portion of         lower bound for cross-machine communication on Ethernet,
+the ASH system and expect to reduce its overhead substantially.     measured on DECstation5000/200s [12].
+Other portions of the cost are due to structuring rather than           A number of more recent experiments measured on top of
+the ASH system itself. For example, the non-ASH version of          the Exokernel system will appear in [15].
+IP and UDP can compute the pseudo-header checksum more
+efficiently than the ASH version since it can directly manipulate
+the message.                                                        7 Related work
+    As shown in the bottom two lines of Table 4, when we
+perform the ping or the ping-bswap experiment with ac-              There have been many instances of ad hoc ILP, for example, in
+tual work to do (4096 bytes of data instead of four), the base      many networking kernels [4]. There is also quite a bit of work
+overhead of using the ASH system is completely hidden. In           on protocol composition [8, 14, 9, 2, 13].
+fact the ASH system is able to exploit integrated layer process-         The system to provide an automatic modular mechanism
+ing to combine the data manipulation steps overhead, and is         for ILP is Abbott and Peterson [1]. They describe an ILP system
+therefore significantly faster than the non-ASH version. Even       that composes macros into integrated loops at compile time,
+in our not-yet-highly-tuned system, we can provide the benefit      eliminating multiple data traversals. Each macro is written with
+of integration while still allowing modularity.                     initialization and finalization code and a main body that takes
+                                                                    in word-sized input and emits word-sized output. They pro-
+                                                                    vide a thorough exploration of the issues in ILP: most of their
+6.3 Experience with ASHs                                            analysis can be applied directly to our system. There are two
+                                                                    main differences between our system and what they describe:
+The ASH system described in this paper is the third revision of     (1) their system is intended for static composition, whereas
+a system developed over the course of the fifteen months. The       our system allows dynamic composition, and (2) they make no
+first version of the system was developed to download message       provisions for application extensions to the system, whereas
+handlers into an operating system kernel where they could           our system allows untrusted code to participate in ILP in a safe
+efficiently direct message placement (eliminating intermediate      and efficient manner. In one sense this last difference is a prac-
+copies), perform integrated operations on the message as it was     tical limitation: static composition makes dynamic extensions
+being placed in memory, and even initiate messages from the         to the ILP engine infeasible. Given the richness of possible
+interrupt handler [7]. We are in the process of reintegrating       data manipulations, however, disallowing application-specific
+the current ASH system into the Exokernel operating system          operations can carry a significant cost. For example, even a
+on which the original was built. As the following experiment        single re-traversal of the data can halve available bandwidth.
+shows (taken from [7]) the use of ASH’s allowed us to achieve       Proebsting and Watterson describe a new algorithm for static
+performance beyond that of even hard-coded in-kernel message        ILP using filter fusion [11].
+routines.                                                                Static composition requires that all desired compositions
+     Table 5 shows the roundtrip latency over Ethernet of ASH-      be known and performed at compilation time. There are two
+based network messaging and compares it to ExOS without             main drawbacks to such an approach. The first is the expo-
+ASHs, Ultrix, and FRPC [12] (the fastest RPC in the literature
+                                                                    nential code growth inherent in it. For example, to perform
+on comparable hardware). Roundtrip latency for Aegis and            data conversion between two hosts a static system must have
+Ultrix was measured by ping-ponging a counter in a 60-byte          pre-composed all possible conversion methods (i.e., between
+big- and little-endian, external and internal ASCII, Cray float-           Communication Architectures, Protocols, and Applications (SIG-
+ing point and SPARC, etc.). Additionally adding all possible               COMM) 1994, pages 2–13, October 1994.
+checksum, encryption, and compression operations will only             [6] D. R. Engler. VCODE: a retargetable, extensible, very fast dy-
+increase code size. Dynamic composition allows these opera-                namic code generation system. In Proceedings of the SIGPLAN
+tions to be combined as need be, scaling memory consumption                ’96 Conference on Programming Language Design and Imple-
+linearly in proportion to actual use. The second, more subtle              mentation, May 1996.
+problem of static composition is that the system is a closed one:      [7] D. R. Engler, M. F. Kaashoek, and J. O’Toole Jr. Exokernel: an
+the operating system can neither extend the ILP processing it              operating system architecture for application-specific resource
+performs nor have it extended by applications. In contrast, the            management. In Proceedings of the Fifteenth ACM Symposium
+ASH system allows new manipulation functions to be dynami-                 on Operating Systems Principles, December 1995.
+cally incorporated into the system.                                    [8] Robert Harper and Peter Lee. Advanced languages for systems
+                                                                           software: The Fox project in 1994. Technical Report CMU-
+                                                                           SC-94-104, Carnegie Mellon University, Pittsburgh, PA 15213,
+8 Conclusion                                                               January 1994.
+                                                                       [9] N.C. Hutchinson and L.L. Peterson. The x-kernel: an architecture
+The ASH system provides a framework to build network pro-                  for implementing network protocols. IEEE Trans. on Soft. Eng.,
+tocols efficiently and well. It is the first system to provide             17(1), Jan. 1991.
+dynamic integration of layer processing steps. Without this
+ability, previous systems have had to resort to copying mes-          [10] J. Postel.   Transmission control protocol.       RFC 793,
+                                                                           USC/Information Sciences Institute, September 1981.
+sages multiple times as the message is moved across modularity
+boundaries.                                                           [11] T.A. Proebsting and S.A. Watterson. Filter fusion. In Proc.
+    A surprising result of this paper is that modular, automatic           POPL, January 1996.
+layer integration can be significantly more efficient than even       [12] C. A. Thekkath and H. M. Levy. Limits to low-latency communi-
+non-modular, hand-crafted code. For example, an implemen-                  cation on high-speed networks. ACM Transactions on Computer
+tation of the internet checksum automatically integrated into              Systems, 11(2):179–203, May 1993.
+a memory copy loop by the ASH system was over a factor of             [13] C. Tschudin. Flexible protocol stacks. In Proc. SIGCOMM 1991,
+two more efficient than a hand-crafted loop on the SPARC ar-               pages 197–204, August 1991.
+chitecture. This result is mainly due to two factors. First, we       [14] R. van Renesse, K.P. Birman, Roy Friedman, Mark Hayden, and
+have designed a language that provides portable access to key              David Karr. A framework for protocol composition in horus.
+network operations not usually available to programmers. Im-               In Proc. Principles of Distributed Computing, pages 138–150,
+plementors can use this control to implement many network                  August 1995.
+operations more efficiently than is possible using current com-       [15] Deborah A. Wallach, Dawson R. Engler, and M. Frans Kaashoek.
+pilers. Second, we have aggressively exploited dynamic code                ASHs: Application-specific handlers for high-performance mes-
+generation to eliminate interpretation.                                    saging. In ACM Communication Architectures, Protocols, and
+    While the system provides efficient support for message                Applications (SIGCOMM ’96) (to appear), Stanford, California,
+processing, its interface is both simple and powerful. A re-               August 1996.
+stricted number of primitives can be used in regular ways to
+perform a rich set of actions.
+    An important practical benefit of our approach is that it
+does not require source code in order to integrate layers. As a
+result, it can be used to couple routines available only in system
+libraries or even to routines that are dynamically linked in. The
+most important benefit of this methodology is that the applica-
+tion can be integrated into message processing in the same way
+as protocols themselves. Such integration is crucial in order to
+eliminate multiple data manipulations that would otherwise
+result from crossing the application/protocol boundary.
+
+References
+ [1] M. B. Abbott and L. L. Peterson. Increasing network through-
+     put by integrating protocol layers. IEEE/ACM Transactions on
+     Networking, 1(5):600–610, October 1993.
+ [2] N.T. Bhatti and R.D. Schlichting. A system for constructing
+     configurable high-level protocols. In Proc. SIGCOMM 1995,
+     pages 138–150, August 1995.
+ [3] D. D. Clark and D. L. Tennenhouse. Architectural considera-
+     tions for a new generation of protocols. In ACM Communication
+     Architectures, Protocols, and Applications (SIGCOMM) 1990,
+     September 1990.
+ [4] David D. Clark, Van Jacobson, John Romkey, and Howard Sal-
+     wen. An analysis of TCP processing overhead. IEEE Communi-
+     cations Magazine, 27(6), 1989.
+ [5] P. Druschel, L. L. Peterson, and B. S. Davie. Experiences with
+     a high-speed network adaptor: A software perspective. In ACM
+

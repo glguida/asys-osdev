@@ -1,0 +1,55 @@
+asys: workflow/1
+name: Test plan
+description: Write or revise the test plan, then have the test-plan Senate approve it or return findings.
+inputs:
+  request: {type: string}
+  feedback: {type: string}
+output: ${review}
+start: plan
+steps:
+  plan:
+    run: goal
+    description: Write or revise the test plan
+    input:
+      request: >-
+        Write the project's test plan to docs/spec/test-plan.md, based on the
+        approved specification in docs/spec/architecture.md.
+
+        Project request:
+        ${request}
+
+        The test plan must say how the system will be verified on each target
+        architecture: test levels (unit, integration, system under QEMU),
+        the harnesses and tools to use, what evidence counts as a pass
+        (including how to judge runs that end by timeout), and, for every job
+        ID in the specification's plan of work, the tests that will show its
+        acceptance criteria are met. Build any harness the plan relies on only
+        if the plan says it must exist before the first job; otherwise list it
+        as work for the jobs.
+
+        If docs/spec/test-plan.md exists, revise it rather than starting over,
+        and address this feedback:
+        ${feedback}
+    next: review
+  review:
+    run: senate-test-plan
+    description: Test-plan Senate debates the test plan
+    input:
+      request: >-
+        Debate the test plan in docs/spec/test-plan.md against the approved
+        specification in docs/spec/architecture.md, and decide whether to
+        approve it.
+
+        Project request:
+        ${request}
+
+        Judge whether every job in the plan of work has tests that would
+        actually show its acceptance criteria are met, whether the evidence
+        rules are sound, and whether the plan is practical with the tools in
+        this environment. Do not edit the test plan.
+
+        Return approved (boolean) and reason (string: the decision and, when
+        not approved, the concrete changes required), alongside final and
+        exception.
+    next: done
+  done: {end: Reviewed}

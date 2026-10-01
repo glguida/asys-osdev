@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "head-of-performance",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Measures and improves the cost of the system's low-level mechanisms."
+}

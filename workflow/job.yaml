@@ -1,0 +1,70 @@
+asys: workflow/1
+name: Job
+description: Implement one job from its design document, test it against that design, and have the review Senate approve it.
+inputs:
+  job_id: {type: string}
+  title: {type: string}
+  design_path: {type: string}
+  feedback: {type: string}
+output: "{approved: review.approved, reason: review.reason, tests_passed: test.passed}"
+start: implement
+steps:
+  implement:
+    run: goal
+    description: Implement the job
+    input:
+      request: >-
+        Implement job ${job_id} (${title}) exactly as its design document
+        ${design_path} specifies, within the project's specification
+        (docs/spec/architecture.md) and test plan (docs/spec/test-plan.md).
+        Build it for every target architecture it affects, add or update the
+        tests the design and test plan call for, and run them. Keep build
+        outputs out of version control: build out of tree or list them in
+        .gitignore, because every round is committed. Do not widen
+        the job beyond its design; report anything the design got wrong.
+
+        Feedback from the previous review of this job, to address:
+        ${feedback}
+    next: test
+  test:
+    run: head-of-qa
+    description: Test the job against its design
+    input:
+      request: >-
+        Test job ${job_id} (${title}) against its design document
+        ${design_path} and the test plan docs/spec/test-plan.md. Rebuild from
+        a clean build directory, run every test the design and test plan
+        require for this job, and probe the paths they miss. Do not fix the
+        implementation.
+
+        Write docs/jobs/${job_id}/test-report.md with each check, its command,
+        its result and the evidence. Return passed (boolean: every required
+        check passed) and findings (string), alongside final and exception.
+    next: review
+  review:
+    run: senate-review
+    description: Review Senate judges the job
+    input:
+      request: >-
+        Review job ${job_id} (${title}). Its design is ${design_path}; its test
+        report is docs/jobs/${job_id}/test-report.md (QA reported passed =
+        ${test.passed}). Inspect the implementation and the evidence, and
+        decide whether the job meets its design and acceptance criteria.
+        Do not edit the project.
+
+        Return approved (boolean) and reason (string: the decision and, when
+        not approved, the concrete findings to fix), alongside final and
+        exception.
+    next: commit
+  commit:
+    run: git
+    description: Commit this round with the review outcome
+    args:
+      - commit
+      - ${job_id}
+      - ${title}
+      - >-
+        Review: ${if review.approved = true then "approved" else "rejected"}.
+        QA passed: ${string(test.passed)}. ${review.reason}
+    next: done
+  done: {end: Reviewed}

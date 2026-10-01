@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "head-of-qa",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Independently verifies the work by building, testing and debugging it."
+}

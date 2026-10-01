@@ -1,0 +1,92 @@
+asys: workflow/1
+name: Work cycle
+description: The planning Senate picks the next job and writes its design; the job is implemented, tested and reviewed, with up to three fix rounds.
+inputs:
+  request: {type: string}
+  previous: {type: string}
+  plenary: {type: string}
+output: >-
+  {project_complete: plan.project_complete, job_id: plan.job_id,
+  title: plan.title,
+  approved: if job = null then null else job.approved,
+  reason: if job = null then plan.reason else job.reason}
+start: plan
+steps:
+  plan:
+    run: senate-planning
+    description: Planning Senate decides the next job and its design
+    input:
+      request: >-
+        Decide the next job for this project and agree its design.
+
+        Project request:
+        ${request}
+
+        Read the specification's plan of work (docs/spec/architecture.md),
+        the test plan (docs/spec/test-plan.md), and the record of finished
+        work in docs/jobs/ (each job's design.md and test-report.md, and
+        docs/jobs/log.md). Outcome of the previous cycle:
+        ${previous}
+
+        Findings from the last plenary session, if any:
+        ${plenary}
+
+        Choose the next job: the next unfinished job in the plan of work, a
+        job the previous cycle failed to finish (redesign or split it if it
+        failed review three times), or a fix for a plenary finding. If every
+        job in the plan is finished and no plenary finding remains open, the
+        project is complete.
+
+        Unless the project is complete, the Princeps writes the agreed design
+        to docs/jobs/JOB_ID/design.md: scope, the concrete changes, the
+        interfaces touched, how it will be built, and how it will be tested
+        (the Head of QA's test procedure and pass criteria). The Princeps also
+        appends one line for the chosen job to docs/jobs/log.md.
+
+        Return project_complete (boolean), job_id (string, empty when
+        complete), title (string), design_path (string, empty when complete)
+        and reason (string: why this job, or why the project is complete),
+        alongside final and exception.
+    next: route
+  route:
+    switch:
+      - when: plan.project_complete = true
+        next: complete
+    default: begin
+  begin:
+    run: git
+    description: Commit pending work as this job's base
+    args: [begin, "${plan.job_id}", "${plan.title}"]
+    next: job
+  job:
+    repeat:
+      step:
+        call: job.yaml
+        input:
+          job_id: ${plan.job_id}
+          title: ${plan.title}
+          design_path: ${plan.design_path}
+          feedback: >-
+            ${if job = null then "First attempt; no earlier review." else job.reason}
+      until: ${step.approved}
+      max: 3
+    description: Implement, test and review, with up to three rounds
+    on_error: abandon
+    next: job_route
+  job_route:
+    switch:
+      - when: job.approved = true
+        next: finished
+    default: discard
+  discard:
+    run: git
+    description: Rejected three times; reset to the job's base for replanning
+    args: [discard, "${plan.job_id}", "${if job = null then \"no result\" else job.reason}"]
+    next: finished
+  abandon:
+    run: git
+    description: The job failed; reset to its base and fail so recovery decides
+    args: [discard, "${plan.job_id}", "${if job = null or job.exception = null then \"job failed\" else string(job.exception)}", --fail]
+    next: finished
+  complete: {end: Project complete}
+  finished: {end: Job finished}

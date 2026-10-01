@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["approved", "revise", "rejected"], "title": "Your verdict"},
+    "comments": {"type": "string", "title": "Comments for the next stage"}
+  },
+  "required": ["verdict"],
+  "additionalProperties": false
+}

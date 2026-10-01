@@ -1,0 +1,276 @@
+   The Operating System Kernel as a Secure Programmable Machine
+                 Dawson R. Engler   M. Frans Kaashoek      James W. O'Toole Jr.
+                              MIT Laboratory for Computer Science
+                                    545 Technology Square
+                                    Cambridge, MA 02139
+
+Abstract                                                         tions are inadequate, their implementation slow, or
+                                                                 both [4, 5, 14, 15, 22, 29, 31]. We believe that these
+To provide modularity and performance, operating                 problems can be solved by simply lowering the in-
+system kernels should have only minimal embedded                 terface to the hardware that is enforced by the ker-
+functionality. Today's operating systems are large,              nel: namely, by exporting physical resources to ap-
+inecient and, most importantly, in flexible. In our               plications directly, management and abstraction of
+view, most operating system performance and ex-                  these resources can be specialized for simplicity, e-
+ibility problems can be eliminated simply by push-               ciency, and appropriateness. Exposing the raw hard-
+ing the operating system interface lower. Our goal               ware aids kernel extensibility in a direct manner: the
+is to put abstractions traditionally implemented by              easiest kernel primitive to extend is the one that is
+the kernel out into user-space, where user-level li-             not there. The low-level interface exported by the ex-
+braries and servers abstract the exposed hardware re-            okernel opens the possibility of user-level implemen-
+sources. To achieve this goal, we have defined a new              tations of basic system objects. Furthermore, these
+operating system structure, exokernel, that safely ex-           implementations can coexist on the same system al-
+ports the resources defined by the underlying hard-               lowing them to be tuned to a specific application
+ware. To enable applications to benefit from full                 domain and, potentially, realized at a level of e-
+hardware functionality and performance, they are al-             ciency unmatched by any current system. More im-
+lowed to download additions to the supervisor-mode               portantly, the exokernel allows applications to craft
+execution environment. To guarantee that these ex-               their own abstractions (without emulation on high-
+tensions are safe, techniques such as code inspection,           level OS primitives) in ways that are fundamentally
+inlined cross-domain procedure calls, and secure lan-            not possible in any other operating system.
+guages are used. To test and evaluate exokernels and
+their customization techniques a prototype exokernel,               Unlike our approach, a traditional monolithic op-
+Aegis, is being developed.                                       erating system normally provides a single xed pol-
+                                                                 icy for resource management. However, no single
+                                                                 policy is best for all applications. For example,
+1 Introduction                                                     le system and relational database applications of-
+                                                                 ten have different storage access patterns and there-
+Traditionally, operating systems have implemented                fore benefit from different bu er and disk manage-
+system objects (such as processes, address spaces, ex-           ment policies. Similar policy con icts arise in al-
+ception handling), forcing applications to make do               most every area of resource management (for exam-
+with what is provided. Frequently these abstrac-                 ple, in virtual memory management [15]). Microker-
+                                                                 nels have pushed some policy decisions out of the
+     fengler|kaashoek|jamesg@lcs.mit.edu, MIT Laboratory         kernel into user-level servers. However, these poli-
+for Computer Science, 545 Technology Square, Cambridge, MA       cies cannot, generally, be altered or replaced by non-
+02139, 617-253-7436. This work was supported in part by the
+Advanced Research Projects Agency under Contract N00014-         privileged applications. Additionally, in these mi-
+94-1-0985; the second author is partially supported by an NSF    crokernels the supervisor mode still defines a high-
+National Young Investigator award. The views and conclusions     level, xed interface among the kernel, user-level ser-
+contained in this document are those of the authors and should   vices, and applications. Therefore, applications su er
+not be interpreted as representing the ocial policies, either
+expressed or implied, of the U.S. government.                    from a large number of protection domain crossings.
+                                                                 These crossings are typically expensive, as they in-
+volve entering supervisor mode and changing address         allocation, arbitration services, and a programmable
+spaces [3, 7, 25].                                          interface. In designing the Aegis exokernel, we intend
+   The disadvantages of xed operating system poli-          to strictly limit the functionality that is embedded
+cies are made worse by the growing diversity in hard-       and non-customizable. Many of the primitives sup-
+ware platforms and rapid advances of technology. For        plied by other \minimalistic" kernels are viewed as
+example, in a mobile computer it is of crucial impor-       applications by the exokernel. For example, we do
+tance to save power by carefully managing the spin-         not expect the kernel to include page-table manage-
+down policy of the disk. As an example of rapid ad-         ment, a le-system, inter-process communication, or
+vances in technology, new architectures support pro-        processes management. We expect the Aegis system
+tected user-level communication that requires little        to enable unprecedented experimentation with tech-
+involvement of the operating system [6, 19]. By xing        niques for safe customization of application operating
+policies operating system software prevents applica-        environments.
+tions from evolving with the hardware.                         The exokernel's sole function is to allocate, deal-
+   By moving management of resources out of the op-         locate, and multiplex physical resources in a secure
+erating system kernel, an exokernel allows aggressive       way. The resources exported by the exokernel include
+customization. We see three reasons for customiza-          physical memory (divided into pages), the CPU (di-
+tion:                                                       vided into time-slices), the TLB, context-identi ers,
+    Tailor policies to given hardware con gurations,       and disk memory (divided into blocks).
+      allowing applications to advance with the hard-          Access to physical resources is controlled through
+      ware.                                                 64-bit capabilities that rely on \security though ob-
+                                                            scurity" [23]. 1 The operational view of access control
+    Tailor policies to given applications. For exam-       is that each resource (e.g., time-slices, pages) is asso-
+      ple, the interaction of application and the virtual   ciated with a capability. Every point the resource
+      memory system is crucial to the performance of        could be used is protected by a guard. When an
+      applications. Changes to VM policies can enable       application wishes to use a resource it presents the
+      distributed shared memory systems and garbage         capability to the guard. The guard checks the access
+      collectors to run an order of magnitude faster.       rights given by the capability.
+    Improve performance by reducing the overhead              The exokernel performs two non-physical functions:
+      of interrupts, TLB faults, traps and context          exception forwarding and upcalls. The exokernel
+      switches, which are some of the primary sources       hands exceptions directly to applications, enabling
+      of overhead in today's operating systems. Cus-        ecient user-level exception handling. Upcalls im-
+      tomization allows compile-time and run-time           plement synchronous cross-domain transfer of con-
+      specialization.                                       trol. Operationally, an upcall transfers the program
+                                                            counter in one domain to an agreed upon value in
+   To minimize the performance impact of crossing           another, and installs the called domain's exception
+the kernel boundary, the exokernel allows applica-          context. This mechanism is light-weight (our unop-
+tions to run user code safely in the kernel. In this pa-    timized implementation takes 20 instructions on a
+per we discuss three techniques to make the exokernel       MIPS R3000) and lets applications build their own
+design safe and ecient: (1) code inspection, (2) in-       IPC semantics (i.e., a client can trust a server to save
+lined cross-domain calls, and (3) type-safe languages.      and restore registers).
+We are prototyping the new design and implementa-              To allow applications to fully exploit the physical
+tion techniques in Aegis, an experimental exokernel.        hardware, the exokernel provides facilities to down-
+   The outline of the rest of the paper is as follows:      load code behind the supervisor barrier. For exam-
+Section 2 presents a design sketch of a prototype ex-       ple, this code can access unmapped physical memory,
+okernel, Aegis; Section 3 discusses our proposal for a      which can be important for handling TLB-miss excep-
+secure programmable machine and the implementa-             tions. Additionally, by allowing user code and state to
+tion techniques that permit safe customization across       reside behind the supervisor barrier, the frequency of
+the supervisor mode barrier. In Section 4, we brie y        user/supervisor kernel crossings can be reduced. The
+discuss related work and in Section 5 we conclude.          techniques we use for this are described in Section 3.
+                                                               The exokernel's low-level interface is defined by
+2 An Exokernel Structure                                        1 Since we intend for the exokernel to scale across different
+                                                            trust models, the capability size can be modified. For instance,
+We are building the Aegis kernel to test the feasibil-      in an embedded system that has cooperating processes, capa-
+ity of an exokernel that provides minimal resource          bilities may simply be the name of the object.
+the raw hardware: physical memory pages, DMA                  too restrictive for many application purposes.
+channels, I/O devices, translation look-aside bu er,          Wahbe [32] shows that sandboxing can be used
+processors, addressing context identi ers, and inter-         to restrict the domain of indirect memory opera-
+rupt/trap events. This \abstraction free" interface           tions, but with an overhead of several instruc-
+allows flexible user-level implementations of tradi-            tions per guarded operation. The motivation
+tionally rigidly defined OS services. For instance,            of sandboxing is to simulate address-space pro-
+since the exokernel does not enforce a particular page-       tection domains when cross-domain calls are ex-
+table structure, applications can aggressively special-       pensive. However, if the application code is ex-
+ize them. Since the address space of a \protected ob-         ecuted in supervisor mode, then switching ad-
+ject" may contain just a few pages, it can be mapped          dress spaces may require only a few privileged
+using a small linear page-table, while a single 64-           instructions (e.g., to change the processor con-
+bit address-space subsystem may use inverted page-            text identi er). The application can execute in
+tables. As another example, the exokernel allows ap-          supervisor mode, but in a restricted addressing
+plications to directly manipulate context-identi ers,         context. Protected data structures can be ma-
+enabling ecient protection domain switching, an ac-          nipulated by calling machine primitives. If wild
+tion important to many applications [32].                     jumps are prevented, then cross-domain calls can
+                                                              be safely inlined, including the instructions that
+3 A Secure Programmable                                       change the addressing context. An example of
+                                                              where this is used is in a TLB exception handler,
+  Machine                                                     which must be invoked with low-latency after a
+                                                              TLB miss.
+We expect the operating system kernel to provide a
+programmable machine that permits applications to          3. Type-safe language. If applications need to
+safely and eciently manage system resources. The             customize the operating system kernel with op-
+secure machine executes in supervisor mode because            erations that require frequent and intensive ma-
+it uses privileged instructions. Our design protects          nipulation of shared protected data structures,
+the secure machine against unsafe application code            then page-granularity protections may not suf-
+using traditional methods: unsafe application code              ce. Using a type-safe language and a trusted
+executes only in separate protection domains.                 compiler might enable closer integration of ap-
+   In addition, to permit ecient management of sys-          plication and kernel code, while simultaneously
+tem resources, our design permits controlled execu-           increasing portability. An example of this is our
+tion of application code in supervisor mode. This             packet- lter engine, which uses dynamic code
+makes the secure machine programmable and enables             generation [12] to directly compile packet- lter
+safe, ecient customization of the operating system.          predicates specified in a declarative, type-safe
+However, only safe application code may be executed           language.
+in supervisor mode. We are examining several imple-       We expect each of these techniques to be useful for
+mentation techniques that permit safe customization       some kinds of exokernel extensions, depending on the
+across the supervisor mode barrier. These techniques
+ensure that application code will not access privileged   tradeo s involved.
+instructions or protected data in uncontrolled ways:
+  1. Code Inspection. Code introduced into the se-        4 Related Work
+     cure programmable machine must be free of priv-
+     ileged instructions. As shown by Deutsch [11],       Many early operating systems papers discussed the
+     machine code can be inspected to guard against       need for extensible kernels [34, 17, 21, 33]. Lamp-
+     wild loads, stores, and jumps. Execution time        son's description of the CAL-TSS [20] and Brinch
+     can also be controlled by bounding loop itera-       Hansen's microkernel paper [13] are two classic ra-
+     tion counts. With suciently stringent restric-      tionales. Hydra was the most ambitious system to
+     tions on the application code, it can be safely      have the separation of kernel policy and mechanism
+     executed in supervisor mode, and primitives of       as one of its central tenets [34]. Modern revisitations
+     the secure machine that use privileged instruc-      of microkernels have also argued for kernel extensibil-
+     tions can be inlined into the inspected code.        ity [16, 26, 1, 28, 30, 10]. Anderson [2] and Kiczales
+                                                          et al. [18] also recently argued for minimalism and
+  2. Inlined cross-domain calls. Code inspection          customization. Two important di erences between
+     that prohibits indirect loads and stores will be     our work and previous approaches are that: (1) the
+  xed kernel interface in these systems is a high-level    address spaces, threads, and application kernels as
+one (e.g., page-tables are implemented by the kernel)      kernel-based abstractions. In contrast, the exoker-
+and (2) customization is expensive since it is usually     nel exposes the machine primitives necessary to con-
+accomplished through the addition of servers that in-      struct these abstractions to applications; direct ma-
+teract with the kernel via IPC.                            nipulation of physical resources allows applications
+   The interface provided by the VM/370 operating          to implement services that were formerly enforced by
+system [9] is very similar to what would be provided       the operating system (e.g., page-table management),
+by an ideal exokernel, namely the raw hardware.            with a corresponding improvement in flexibility and
+However, the important difference is that VM/370            performance. Additionally, the Cache Kernel has an
+provides this interface by virtualizing the entire base-   alarmist view about downloading application code
+machine. Since this machine can be quite complicated       into the kernel [8]; this restricts the eciency and
+and expensive to emulate faithfully, virtualization can     flexibility of their approach.
+have a high cost in both kernel complexity and e-            Techniques for certifying the safety of code in-
+ciency. In contrast, the exokernel exports hardware        clude inspection and sandboxing. Deutsch showed
+resources rather than emulating them, allowing an          how to safely introduce user-written instrumentation
+ecient and fast implementation.                           code into a running kernel by bounding loads, stores,
+   Synthesis is an innovative operating system that        jumps and runtime [11]. Making existing binaries safe
+has inspired some of our work [22]; for example, the       has been done by Wahbe [32]. Although this tech-
+use of runtime code generation. The Aegis system,          nique will be useful for controlling entry points, we
+however, uses a portable runtime code generation           expect that loads and stores can be constrained more
+system [12], while the synthesis kernel is written in      eciently by changing the address context quickly
+assembly, and uses ad-hoc runtime code generation          within supervisor mode.
+macros to specialize system calls. Furthermore, the           The use of a typesafe language to allow user ap-
+Aegis system will use runtime code generation to ef-       plications to augment the operating system has been
+  ciently execute application kernel extensions.           explored in a personal workstation environment [27].
+   Concurrently with our work the SPIN [5] and             Myers argued for using a type safe language to load
+Cache Kernel [8] projects are also investigating adapt-    application code into the object manager in a persis-
+able kernels that allow applications to make policy        tent object system [24].
+decisions eciently.
+   The SPIN system encapsulates policies in spindles
+that can be dynamically loaded into the kernel. To         5 Conclusions
+ensure safety, spindles will be written in a pointer-      Operating systems must shed the burden of their tra-
+secure language and will be translated by a trusted        ditional policy-laden services. We suggest exokernels
+compiler. In contrast, we anticipate using a variety of    as an new minimal operating system design. The key
+customization techniques that permit safe execution        exokernel idea is to obtain flexibility through a low-
+of small pieces of application code within the exoker-     level kernel interface; i.e., the easiest kernel primitive
+nel, some of which will allow the kernel interface to      to extend is the one that is not there. To minimize the
+be extended using existing application code. In ad-        overhead of protection domain crossings we proposed
+dition, the exokernel aggressively moves code out of       three customization techniques.
+the operating system kernel into user-space; its kernel
+interface provides a much low-level interface than mi-
+crokernels do. The SPIN project, on the other hand,        References
+concentrates more on moving user code into a micro-         [1] M. Accetta, R. Baron, W. Bolosky, D. Golub, R. Rashid,
+kernel.                                                         A. Tevanian, and M. Young. Mach: a new kernel founda-
+   The Cache Kernel shares our belief that a low-level          tion for UNIX development. Proc. Summer 1986 USENIX
+                                                                Conference, pages 93{112, July 1986.
+interface is the panacea that can cure current oper-        [2] T.E. Anderson. The case for application-speci coperating
+ating system troubles. The main difference between               systems. In Third Workshop on Workstation Operating
+the two projects is in how low the operating system             Systems, pages 92{94, 1992.
+interface is pushed. The Cache Kernel designers still       [3] T.E. Anderson, H.M. Levy, B.N. Bershad, and E.D. La-
+see themselves in the business of abstracting physical          zowska. The interactionof architectureand operating sys-
+resources (i.e., hiding information, disallowing ne-            tem design. In Proc. Fourth International Conference on
+                                                                ASPLOS, 1991.
+grain user-management) rather than exposing them            [4] A.W. Appel and K. Li. Virtual memory primitives for
+(i.e., removing as much abstraction/virtualization as           user programs. In Proc. Fourth International Conference
+possible). For example, the Cache Kernel provides               on ASPLOS, pages 96{107, Santa Clara, CA, April 1991.
+ [5] B.N. Bershad, C. Chambers, S. Eggers, C. Maeda, D. Mc-       [23] S.J. Mullender, G. van Rossum, A.S. Tanenbaum, R. van
+     Namee, P. Pardyak, S. Savage, and E. Sirer. Spin - an ex-         Renesse, and H. van Staveren. Amoeba: a distributed op-
+     tensible microkernelfor application-specific operating sys-        erating system for the 1990s. IEEE Computer, 23(5):44{
+     tem services. TR 94-03-03, Univ. of Washington, February          53, May 1990.
+     1994.                                                        [24] A.C. Myers. Resolving the integrity/performance con ict.
+ [6] M.A. Blumrich, K. Li, R. Alpert, C. Dubnicki, E.W. Fel-           In Fourth Workshop on Workstation Operating Systems,
+     ten, and J. Sandberg. Virtual memory mapped network               pages 156{160, October 1993.
+     interface for the SHRIMP multicomputer. The 21st An-         [25] David Nagle, Richard Uhlig, Tim Stanley, Stuart
+     nual International Symposium on Computer Architecture,            Sechrest, Trevor Mudge, and Richard Brown. Design
+     pages 142{153, April 1994.                                        tradeo s for software-managed TLBs. 20th Annual In-
+ [7] J. Bradley Chen and Brian N. Bershad. The impact of op-           ternational Symposium on Computer Architecture, pages
+     erating system structure on memory system performance.            27{38, 1993.
+     Proceedings of the Fourteenth ACM Symposium on Oper-         [26] R.F. Rashid and G. Robertson. Accent: A communication
+     ating Systems Principles, 1993.                                   oriented network operating system kernel. Proceedings of
+ [8] D. Cheriton and K. Duda. A caching model of operat-               the Eighth ACM Symposium on Operating Systems Prin-
+     ing system kernel functionality. Proceedings of the Sixth         ciples, pages 64{75, December 1981.
+     SIGOPS European Workshop, September 1994.                    [27] D.D. Redell, Y.K. Dalal, T.R. Horsley, H.C. Lauer, W.C.
+ [9] R. J. Creasy. The origin of the VM/370 time-sharing sys-          Lynch, P.R. McJones, H.G. Murray, and S.C. Purcell. Pi-
+     tem. IBM J. Research and Development, 25(5):483{490,              lot: An operating system for a personal computer. Com-
+     September 1981.                                                   munications of the ACM, 23(2):81{92, February 1980.
+[10] H. Custer. Inside Windows/NT. Microsoft Press, Red-          [28] M. Rozier, V. Abrossimov, F. Armand, I. Boule, M. Gien,
+     mond, WA, 1993.                                                   M. Guillemont, F. Herrmann, C. Kaiser, S. Langlois,
+[11] P. Deutsch and C.A. Grant. A flexible measurement tool              P. Leonard, and W. Neuhauser. Chorus distributed oper-
+     for software systems. Information Processing 71, 1971.            ating system. Computing Systems, 1(4):305{370, 1988.
+[12] D.R. Engler and T.A. Proebsting. DCG: An ecient,            [29] M. Stonebraker. Operating system support for database
+     retargetabledynamiccode generation system. Proceedings            management. CACM, 24(7):412{418, July 1981.
+     of ASPLOS-VI, pages 263{272, October 1994.                   [30] A.S. Tanenbaum, R. van Renesse, H. van Staveren,
+[13] Per Brinch Hansen. The nucleus of a multiprogramming              G. Sharp, S.J. Mullender, A. Jansen, and G. van Rossum.
+     system. Communications of the ACM, 13(4):238{241,                 Experiences with the Amoeba distributed operating sys-
+     April 1970.                                                       tem. Communications of the ACM, 33(12):46{63, Decem-
+[14] J.H. Hartman, A.B. Montz, David Mosberger, S.W.                   ber 1990.
+     O'Malley, L.L. Peterson, and T.A. Proebsting. Scout: A       [31] Chandramohan A. Thekkath and Henry M. Levy. Hard-
+     communication-oriented operating system. Technical Re-            ware and software support for ecient exception handling.
+     port TR 94-20, University of Arizona, Tucson, AZ, June            In Sixth International Conference on Architectural Sup-
+     1994.                                                             port for Programming Languages and Operating Systems
+[15] Kieran Harty and David R. Cheriton. Application-                  (ASPLOS-VI), 1994.
+     controlled physical memory using external page-cache         [32] R. Wahbe, S. Lucco, T. Anderson, and S. Graham. Ef-
+     management. Proc. of the Fifth Conf. on Architectural               cient software-based fault isolation. Proceedings of the
+     Support for Programming languages and Operating Sys-              Fourteenth ACM Symposium on Operating Systems Prin-
+     tems, pages 187{199, October 1992.                                ciples, pages 203{216, 1993.
+[16] D. Hildebrand. An architectural overview of QNX. Proc.       [33] B.A. Wichmann. A modular operatingsystem. Proc. IFIP
+     Usenix Workshop on Micro-kernels and Other Kernel Ar-             Cong. 1968, 1968.
+     chitectures, April 1992.                                     [34] W. Wulf, E. Cohen, W. Corwin, A. Jones, R. Levin,
+[17] D.H.R. Huxtable and M.T. Warwick. Dynamic supervi-                C. Pierson, and F. Pollack. HYDRA: The kernel of a
+     sors | their design and construction. Proceedings of the          multiprocessingoperatingsystem. Communications of the
+     First ACM Symposium on Operating Systems Principles,              ACM, 17(6):337{345, July 1974.
+     1967.
+[18] G. Kiczales, J. Lamping, C. Maeda, D. Keppel, and
+     D. McNamee. The need for customizable operating sys-
+     tems. In Fourth Workshop on Workstation Operating Sys-
+     tems, pages 165{170, October 1993.
+[19] J. Kuskin et al. The Stanford FLASH multiprocessor.
+     The 21st Annual International Symposium on Computer
+     Architecture, pages 302{313, April 1994.
+[20] B.W. Lampson. On reliable and extendable operating sys-
+     tems. State of the Art Report, 1, 1971.
+[21] B.W. Lampson and H.E. Sturgis. Re ections on an op-
+     erating system design. Communications of the ACM,
+     19(5):251{265, May 1976.
+[22] H. Massalin. Synthesis: an ecient implementation
+     of fundamental operating system services. PhD thesis,
+     Columbia University, 1992.
+

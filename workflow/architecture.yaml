@@ -1,0 +1,53 @@
+asys: workflow/1
+name: Architecture
+description: Write or revise the formal specification, then have the architecture Senate approve it or return findings.
+inputs:
+  request: {type: string}
+  feedback: {type: string}
+output: ${review}
+start: specify
+steps:
+  specify:
+    run: goal
+    description: Write or revise the formal specification
+    input:
+      request: >-
+        Write the formal specification of this project to docs/spec/architecture.md.
+
+        Project request:
+        ${request}
+
+        The specification must state what the system is and is not; its
+        requirements and target architectures; its architecture (components,
+        interfaces, invariants, the kernel/userspace division, memory and
+        protection model); and the plan of work: the stages in order, and each
+        stage divided into finite jobs. Give every job a stable ID (for example
+        S1-J3), a one-paragraph scope, its dependencies and its acceptance
+        criteria, so that a job can be designed, implemented and tested on its
+        own. Keep the plan in a section titled "Plan of work".
+
+        If docs/spec/architecture.md exists, revise it rather than starting
+        over, and address this feedback:
+        ${feedback}
+    next: review
+  review:
+    run: senate-architecture
+    description: Architecture Senate debates the specification
+    input:
+      request: >-
+        Debate the formal specification in docs/spec/architecture.md for this
+        project, and decide whether to approve it.
+
+        Project request:
+        ${request}
+
+        Judge whether the specification is correct, complete and buildable;
+        whether its architecture is sound; and whether its stages and jobs are
+        finite, ordered, independently testable and have clear acceptance
+        criteria. Do not edit the specification.
+
+        Return approved (boolean) and reason (string: the decision and, when
+        not approved, the concrete changes required), alongside final and
+        exception.
+    next: done
+  done: {end: Reviewed}

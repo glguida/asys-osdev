@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "goal",
+  "description": "Implementation followed by independent verification, used for the spec, the test plan and each job.",
+  "config": {
+    "model": "pool/gpt-6.1-sol",
+    "maxAttempts": 8
+  }
+}

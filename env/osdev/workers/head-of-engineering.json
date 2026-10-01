@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "head-of-engineering",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Delivers changes that build for every target architecture and keep the project's tests passing."
+}

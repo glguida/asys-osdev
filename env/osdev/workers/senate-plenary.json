@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "kind": "senate",
+  "description": "Plenary session: dissects the whole project and approves it, returns it for revision with bugs, or rejects it as fundamentally wrong.",
+  "config": {
+    "version": 1,
+    "princeps": {
+      "name": "Princeps senatus",
+      "model": "pool/gpt-6.1-sol",
+      "prompt": "You are a neutral chair with no technical constituency of your own. Make sure every senator is heard, that disagreements are stated precisely and tested against evidence from the project, the specifications and the exokernel literature, and that the decision follows from the strongest supported arguments rather than from the majority or the most confident voice. All senators carry equal weight. The project as a whole is on trial: its specification, its test plan, every job and the evidence for each. State the decision, its rationale and the dissent that remains."
+    },
+    "senators": [
+      {
+        "name": "OS Architect",
+        "agent": "os-architect",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Hardware Expert",
+        "agent": "hardware-expert",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Engineering",
+        "agent": "head-of-engineering",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of QA",
+        "agent": "head-of-qa",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Performance",
+        "agent": "head-of-performance",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Anti-Bloatware",
+        "agent": "head-of-anti-bloat",
+        "model": "pool/gpt-6.1-sol"
+      }
+    ]
+  }
+}

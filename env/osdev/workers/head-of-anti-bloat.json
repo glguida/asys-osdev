@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "head-of-anti-bloat",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Keeps the system minimal: removes or prevents needless code, options and abstractions."
+}

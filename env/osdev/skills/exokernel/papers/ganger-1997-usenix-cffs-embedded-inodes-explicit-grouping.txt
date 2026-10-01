@@ -1,0 +1,1005 @@
+First appeared in the Proceedings of the USENIX Technical Conference,January, 1997, pp. 1-17.
+
+
+
+
+                         Embedded Inodes and Explicit Grouping:
+                         Exploiting Disk Bandwidth for Small Files
+                                      Gregory R. Ganger and M. Frans Kaashoek
+                                       M.I.T. Laboratory for Computer Science
+                                            Cambridge MA 02139, USA
+                                      fganger,kaashoekg@lcs.mit.edu
+                                            http://www.pdos.lcs.mit.edu/
+
+                                                                    liseconds), the subsequent data bandwidth is reasonable
+    Abstract                                                        (> 10 MB/second). Unfortunately, although file systems
+                                                                    have been very successful at exploiting this bandwidth
+    Small file performance in most file systems is limited by       for large files [Peacock88, McVoy91, Sweeney96], they
+    slowly improving disk access times, even though cur-            have failed to do so for small file activity (and the cor-
+    rent file systems improve on-disk locality by allocat-          responding metadata activity). Because most files are
+    ing related data objects in the same general region.            small (e.g., we observe that 79% of all files on our file
+    The key insight for why current file systems perform            servers are less than 8 KB in size) and most files ac-
+    poorly is that locality is insufficient — exploiting disk       cessed are small (e.g., [Baker91] reports that 80% of
+    bandwidth for small data objects requires that they be          file accesses are to files of less than 10KB), file system
+    placed adjacently. We describe C-FFS (Co-locating               performance is often limited by disk access times rather
+    Fast File System), which introduces two techniques,             than disk bandwidth.
+    embedded inodes and explicit grouping, for exploit-                One approach often used in file systems like the fast
+    ing what disks do well (bulk data movement) to avoid            file system (FFS) [McKusick84] is to place related data
+    what they do poorly (reposition to new locations). With         objects (e.g., an inode and the data blocks it points to)
+    embedded inodes, the inodes for most files are stored           near each other on disk (e.g., in the same cylinder group)
+    in the directory with the corresponding name, remov-            in order to reduce disk access times. This approach can
+    ing a physical level of indirection without sacrificing the     successfully reduce the seek time to just a fraction of that
+    logical level of indirection. With explicit grouping, the       for a random access pattern. Unfortunately, it has some
+    data blocks of multiple small files named by a given di-        fundamental limitations. First, it affects only the seek
+    rectory are allocated adjacently and moved to and from          time component of the access time1 , which generally
+    the disk as a unit in most cases. Measurements of our           comprises only about half of the access time even for
+    C-FFS implementation show that embedded inodes and              random access patterns. Rotational latency, command
+    explicit grouping have the potential to increase small          processing, and data movement, which are not reduced
+    file throughput (for both reads and writes) by a factor         by simply placing related data blocks in the same gen-
+    of 5–7 compared to the same file system without these           eral area, comprise the other half. Second, seek times
+    techniques. The improvement comes directly from re-             do not drop linearly with seek distance for small dis-
+    ducing the number of disk accesses required by an order         tances. Seeking a single cylinder (or just switching
+    of magnitude. Preliminary experience with software-             between tracks) generally costs a full millisecond, and
+    development applications shows performance improve-             this cost rises quickly for slightly longer seek distances
+    ments ranging from 10–300 percent.                              [Worthington95]. Third, it is successful only when no
+                                                                    other activity moves the disk arm between related re-
+                                                                    quests. As a result, this approach is generally limited
+    1 Introduction                                                  to providing less than a factor of two improvement in
+                                                                    performance (and often much less).
+    It is frequently reported that disk access times have not          Another approach, the log-structured file system
+    kept pace with performance improvements in other sys-               1 We use the terms access time and service time interchangeably to
+    tem components. However, while the time required to             refer to the time from when the device driver initiates a read or write
+    fetch the first byte of data is high (i.e., measured in mil-    request to when the request completion interrupt occurs.
+(LFS), exploits disk bandwidth for all file system data,
+including large files, small files, and metadata. The
+idea is to delay, remap and cluster all modified blocks,         I I I D F1 F2 F3 F4 F5
+only writing large chunks to the disk [Rosenblum92].
+Assuming that free extents of disk blocks are always                          A. Ideal Layout
+available, LFS works extremely well for write activ-
+ity. However, the design is based on the assumption
+that file caches will absorb all read activity and does
+not help in improving read performance. Unfortunately,           I I I      F1 F2          D           F4   F3       F5
+anecdotal evidence, measurements of real systems (e.g.,
+[Baker91]), and simulation studies (e.g., [Dahlin94]) all
+                                                                              B. Reality after usage
+indicate that main memory caches have not eliminated
+read traffic.
+   This paper describes the co-locating fast file system
+(C-FFS), which introduces two techniques for exploiting             D+I     F1 F2          D+I         F4   F3       F5
+disk bandwidth for small files and metadata: embedded
+inodes and explicit grouping. Embedding inodes in the
+                                                                              C. Embedded Inodes
+directory that names them (unless multiple directories do
+so), rather than storing them in separate inode blocks,
+removes a physical on-disk level of indirection without
+sacrificing the logical level of indirection. This tech-            D+I        F3 F4 F5    D+I F1 F2
+nique offers many advantages: it halves the number of
+blocks that must be accessed to open a file; it allows the
+inodes for all names in a directory to be accessed with-                      D. Explicit Grouping
+out requesting additional blocks; it eliminates one of
+the ordering constraints required for integrity during file   Figure 1: Organization and layout of file data on disk.
+creation and deletion; it eliminates the need for static      This figure shows the on-disk locations of directory
+(over-)allocation of inodes, increasing the usable disk       blocks (marked ‘D’), inode blocks (‘I’) and the data
+capacity [Forin94]; and it simplifies the implementation      for five single-block files (‘F1’ – ‘F5’) in four different
+and increases the efficiency of explicit grouping (there      scenarios: (A) the ideal conventional layout, (B) a more
+is a synergy between these two techniques).                   realistic conventional layout, (C) with the addition of
+   Explicit grouping places the data blocks of multiple       embedded inodes, and (D) with both embedded inodes
+files at adjacent disk locations and accesses them as a       and explicit grouping (with a maximum group size of
+single unit most of the time. To decide which small           four blocks).
+files to co-locate, C-FFS exploits the inter-file relation-
+ships indicated by the name space. Specifically, C-FFS
+groups files whose inodes are embedded in the same di-        the ideal layout of data and metadata for five single-
+rectory. The characteristics of disk drives have reached      block files, which might be obtained if one uses a fresh
+the point that accessing several blocks rather than just      FFS partition. In this case, the inodes for all of the files
+one involves a fairly small additional cost. For exam-        are located in the same inode block and the directory
+ple, even assuming minimal seek distances, accessing          block and the five file blocks are stored adjacently. With
+16 KB requires only 10% longer than accessing 8 KB,           this layout, the prefetching performed by most disks will
+and accessing 64 KB requires less than twice as long          exploit the disk’s bandwidth for reads and scatter/gather
+as accessing a single 512-byte sector. Further, the rela-     I/O from the file cache can do so for writes. Unfortu-
+tive cost of accessing more data has been dropping over       nately, a more realistic layout of these files for an FFS
+the past several years and should continue to do so. As       file system that has been in use for a while is more like
+a result, explicit grouping has the potential to improve      that shown in Figure 1B. Reading or writing the same
+small file performance by an order of magnitude over          set of files will now require several disk accesses, most
+conventional file system implementations. Because the         of which will require repositioning (albeit with limited
+incremental cost is so low, grouping will improve per-        seek distances, since the picture shows only part of a
+formance even when only a fraction of the blocks in a         single cylinder group). With embedded inodes, one gets
+group are needed.                                             the layout shown in Figure 1C, wherein the indirection
+   Figure 1 illustrates the state-of-the-art and the im-      between on-disk directory entries and on-disk inodes is
+provements made by our techniques. Figure 1A shows            eliminated. Finally, with both embedded inodes and ex-
+plicit grouping, one gets the layout shown in Figure 1D.       This section uses characteristics of modern disk drives
+In this case, one can read or write all five files with        to show that reading or writing several 4KB or 8KB disk
+two disk accesses. Further, for files F1 and F2, one           blocks costs a relatively small amount more than read-
+can read or write the name, inode and data block all           ing or writing only one (e.g., 10% for 8KB extra and
+in a single disk request. In our actual implementation,        100% for 56KB extra), and that this incremental cost is
+the maximum group size is larger than that shown and           dropping. Because of the high cost of accessing a single
+the allocation code would try to place the second group        block, it makes sense to access several even if only some
+immediately after the first.                                   of them are likely to be necessary. Readers who do not
+   We have constructed a C-FFS implementation that             need to be convinced are welcome to skip to Section 2.2.
+includes both of these techniques. Measurements of                The service time for a disk request can be broken
+C-FFS as compared to the same file system without these        into two parts, one that is dependent on the amount of
+techniques show that, for small file activity, embedded        data being transferred and one that is not. The former
+inodes and explicit grouping can reduce the number of          usually consists of just the media transfer time (unless
+disk accesses by more than an order of magnitude. On           the media transfer occurs separately, as with prefetch or
+the system under test (a modern PC), this translates into      write-behind). Most disks overlap the bus transfer time
+a performance increase of a factor of 5–7 in small file        with the positioning and media transfer times, such that
+throughput for both reads and writes. Although our             what remains, the ramp-up and ramp-down periods, is
+evaluation is preliminary, experiments with actual appli-      independent of the size. Most of the service time com-
+cations show performance improvements ranging from             ponents, most notably including command processing
+10–300 percent.                                                overheads, seek times, and rotational latencies, are inde-
+   The remainder of this paper is organized as follows:        pendent of the request size. With modern disk drives and
+Section 2 provides more detailed motivation for co-            small requests, the size-independent parts of the service
+location, by exploring the characteristics of modern disk      time dominate the size-dependent part (e.g., > 90% of
+drives and file storage usage. Section 3 describes our im-     the total for random 8KB requests).
+plementation of embedded inodes and explicit grouping.            Another way to view the same two aspects of the
+Section 4 shows that co-location improves performance          service time are as per-request and per-byte. The domi-
+significantly by comparing two file system implementa-         nating performance characteristic of modern disk drives
+tions that differ only in this respect. Section 5 discusses    is that the per-request cost is much larger than the per-
+related work. Section 6 discusses some open questions.         byte cost. Therefore, transferring larger quantities of
+Section 7 summarizes this paper.                               useful data in fewer requests will result in a significant
+                                                               performance increase.
+                                                                  One approach currently used by many file system im-
+2 Motivation                                                   plementors is to try to place related data items close to
+                                                               each other on the disk, thereby reducing the per-request
+The motivating insights for this work fall into two broad      cost. This approach does improve performance, but not
+categories: (1) The performance characteristics of mod-        nearly as much as one might hope. It is generally lim-
+ern disk drives, the de facto standard for on-line stor-       ited to reducing seek distances, and thereby seek times,
+age, force us to aggressively pursue adjacency of small        which represent only about half of the per-request time.
+objects rather than just locality. (2) The usage and or-       Rotational latency, command processing and data move-
+ganizational characteristics of popular file systems both      ment comprise the other half. In addition, even track
+suggest the logical relationships that can be exploited        switches and single-cylinder seeks require a significant
+and expose the failure of current approaches in placing        amount of time (e.g., a millisecond or more) because
+related data adjacently.                                       they still involve mechanical movement and settling de-
+                                                               lays. Further, this approach is successful only when no
+2.1    Modern Disk Drive Characteristics                       other activity uses the disk (and thereby moves the disk
+                                                               arm) between related requests. As a result, this approach
+It has repeatedly been pointed out that disk drive access      is generally limited to providing less than a factor of two
+times continue to fall behind relative to other system         in performance (and in practice much less).
+components. However, disk drive manufacturers have                To help illustrate the above claims, Table 1 lists char-
+not been idle. They have matched the improvement               acteristics for three state-of-the-art (for 1996) disk drives
+rates of other system components in areas other than the       [HP96, Quantum96, Seagate96]. Figure 2 shows, for the
+access time, such as reliability, cost per byte, and record-   same three drives, average access times as a function of
+ing density. Also, although it has not improved quite as       the request size. Several points can be inferred from
+rapidly, bulk data bandwidth has improved significantly.       these graphs. First, the incremental cost of reading or
+                                                             Disk Drive                                     Hewlett-Packard                Seagate                                      Quantum
+                                                            Specification                                        C3653a                   Barracuda                                     Atlas II
+                                                              Capacity                                            8.7 GB                    9.1 GB                                       9.1 GB
+                                                              Cylinders                                            5371                      5333                                         5964
+                                                              Surfaces                                              20                        20                                           20
+                                                          Sectors per Track                                      124–173                   153–239                                      108–180
+                                                           Rotation Speed                                      7200 RPM                  7200 RPM                                      7200 RPM
+                                                            Head Switch                                           < 1 ms                     N/A                                          N/A
+                                                           One-cyl. Seek                                          < 1 ms               0.6 ms (0.5 ms)                                   1.0 ms
+                                                            Average Seek                                     8.7 ms (0.8 ms)           8.0 ms (1.5 ms)                                   7.9 ms
+                                                           Maximum Seek                                     16.5 ms (1.0 ms)          19.0 ms (1.0 ms)                                  18.0 ms
+
+
+Table 1: Characteristics of three modern disk drives, taken from [HP96, Seagate96, Quantum96]. N/A indicates
+that the information was not available. For the seek times, the additional time needed for write settling is shown in
+parentheses, if it was available.
+
+
+
+
+                              40                                                                            40                                                                         40
+Service Time (milliseconds)
+
+
+
+
+                                                                              Service Time (milliseconds)
+
+
+
+
+                                                                                                                                                         Service Time (milliseconds)
+                                             avg seek                                                                    avg seek                                                                   avg seek
+                              30             one-cyl                                                        30           one-cyl                                                       30           one-cyl
+                                             avg seek, immed                                                             avg seek, immed                                                            avg seek, immed
+                                             one-cyl, immed                                                              one-cyl, immed                                                             one-cyl, immed
+                              20                                                                            20                                                                         20
+
+
+
+                              10                                                                            10                                                                         10
+
+
+
+                              0                                                                             0                                                                          0
+                                   1   2     4   8   16    32   64 128 256                                       1   2   4   8   16    32   64 128 256                                      1   2   4   8   16   32   64 128 256
+                                       Request Size (in kilobytes)                                                   Request Size (in kilobytes)                                                Request Size (in kilobytes)
+
+                                           (a) HP C3653a                (b) Seagate Barracuda ST19171FC                                                                                     (c) Quantum Atlas II
+
+Figure 2: Average service time as a function of request size. The X-axis uses log scale. Two of the lines in each
+plot represent the access time assuming an average seek time and a single-cylinder seek time, respectively. The other
+two lines in each plot (labelled “immed”) represent the same values, but assuming that the disk utilizes a technique
+known as immediate or zero-latency access. The basic idea is to read or write the data sectors in the order that they
+pass under the read/write head rather than in strictly ascending order. This can eliminate part or all of the rotational
+latency aspect of the service time. These values were calculated from the data in Table 1 using the read seek times
+(which are shorter), assuming zero command initiation/processing overheads, and using the sector/track value for
+the outermost zone.
+
+writing several blocks rather than just one is small. For                                                                        of techniques that co-locate multiple small data objects.
+example, a 16 KB access takes less than 10% longer than                                                                          Third, the seek time for random requests represents a
+an 8 KB access, even assuming a minimal seek time. A                                                                             little more than half the total service time. Therefore,
+64 KB access takes less than twice as long as an 8 KB ac-                                                                        eliminating it completely for a series of requests can
+cess. Second, immediate or zero-latency access extends                                                                           halve each service time after the first. In comparison,
+the range of request sizes that can be accessed for small                                                                        co-location will eliminate the entire service time for a
+incremental cost, which will increase the effectiveness                                                                          set of requests after paying only a slightly higher cost
+for the first. So, while reducing seek times can improve
+performance somewhat, aggressive co-location has the
+potential to provide much higher returns.                                                       100
+   Not only are per-byte costs small relative to per-
+request costs, but they have been decreasing and are
+likely to continue to do so. For example, the HP C2247                                          80
+
+
+
+
+                                                                 Cumulative Fraction of Files
+disk drive [HP91, HP92] of a few years ago had only
+half as many sectors on each track as the HP C3653
+listed in Table 1, but an average access time that was                                          60
+only 33% higher. As a result, a request of 64KB, which
+takes only 2 times as long as a request of 8KB on state-
+of-the-art disks, took nearly 3 times as long as a request                                      40
+of 8KB on older drives. Projecting this trend into the fu-
+ture suggests that co-location will become increasingly
+important.                                                                                      20
+
+
+
+2.2    File System Characteristics                                                               0
+                                                                                                  128   256   512   1024   2048   4096   8192 16384 32768 65536
+File systems use metadata to organize raw storage capac-                                                             File Size (in bytes)
+ity into human-readable name spaces. Most employ a
+hierarchical name space, using directory files to translate
+components of a full file name to an identifier for either       Figure 3: Distribution of file sizes measured on our file
+the desired file or the directory with which to translate        servers.
+the next name component. At each step, the file system
+uses the identifier (e.g., an inode number in UNIX file
+                                                                 file system implementors are very good at dealing with
+systems) to determine the location of the file’s meta-
+                                                                 large files, suggest that it is important to address the
+data (e.g., an inode). This metadata generally includes
+                                                                 performance of small file access.
+a variety of information about the file, such as the last
+modification time, the length, and pointers to where the            Second, despite the fact that each inode block con-
+actual data blocks are stored. This organization involves        tains 64 inodes, multiple inode blocks are often used to
+several levels of indirection between a file name and the        hold the metadata for files named in a particular direc-
+corresponding data, each of which can result in a sepa-          tory (see Figure 4). On average, we found that the ratio
+rate disk access. Additionally, the levels of indirection        of names in a directory to referenced inode blocks is
+generally cause each file’s data to be viewed as an inde-        roughly six to one. That is, every sixth name translates
+pendent object (i.e., logical relationships between it and       to a different inode block. This suggests that the cur-
+other files are only loosely considered).                        rent mechanism for choosing where to place an inode
+   To get a better understanding of real file storage or-        (i.e., inode allocation) does a poor job of placing related
+ganizations, we constructed a small utility to scan some         inodes adjacently. With embedded inodes, we store in-
+of our group’s file servers. The two SunOS 4.1 servers           odes in directories rather than pointers to inodes, except
+scanned supply 13.8 GB of storage from 9 file systems            in the rare case (less than 0.1 percent, on our server) of
+on 5 disks. At the time of the examination, 9.8 GB (71%          having multiple links to a file from separate directories.
+of the total available) was allocated to 466,271 files.          In addition to eliminating a physical level of indirec-
+   In examining the statistics collected, three observa-         tion, embedding inodes reduces the number of blocks
+tions led us to explore embedded inodes and explicit             that contain metadata for the files named by a particular
+grouping. First, as shown in Figure 3 as well as by              directory.
+previous studies, most files are small (i.e., 79% of those          Third, despite the fact that the allocation algorithm
+on our server are smaller than a single 8KB block). In           for single-block files in a directory might be expected
+addition to this static view of file size distributions, stud-   to achieve an ideal layout (as in Figure 1A) on a brand
+ies of dynamic file system activity have reported similar        new file system, these blocks tend to be local (e.g., in
+behavior. For example, [Baker91] states that, although           the same cylinder group) but not adjacent after the file
+most of the bytes accessed are in large files, “the vast         system has been in use. For example, looking at entries
+majority of file accesses are to small files” (e.g., about       in their physical order in the directory, we find that only
+80% of the files accessed during their study were less           30% of directories are adjacent to the first file that they
+than 10KB). These data, combined with the fact that              name. Further, fewer than 45% of files are placed adja-
+     Cumulative Fraction of Directories
+
+
+
+
+                                                                                             Cumulative Fraction of Directories
+                                          100                                                                                     100
+
+
+                                          80                                                                                      80
+
+
+                                          60                                                                                      60
+
+
+                                          40                                                                                      40
+
+
+                                          20                                                                                      20
+
+
+                                           0                                                                                       0
+                                                0      20      40       60     80    100                                                0       5        10        15     20
+                                                    Number of entries in directory                                                      Number of inode blocks per directory
+
+                                                       (a) Directory Entries                                                                    (b) Inode Blocks
+
+Figure 4: Distributions of the number of entries per directory and the corresponding number of inode blocks referred
+to on our file servers.
+
+cent to the file whose name precedes their name in the                                     rectory listing programs that format the output based on
+directory.2 The consequence of this lack of adjacency                                      permissions). Such temporal locality can be exploited
+is that accessing multiple files in a directory involves                                   directly with embedded inodes. Similarly, it is common
+disk head movement for every other file (when the file                                     for applications to access multiple files in a directory
+cache does not capture the accesses). The lack of ad-                                      (e.g., when scanning a set of files for a particular string
+jacency occurs because, for the first block of a file, the                                 or when compiling and linking a multi-file program), as
+file system always begins looking for free space at the                                    opposed to accessing files randomly strewn throughout
+beginning of the cylinder group. With explicit grouping,                                   the name space. Therefore, explicitly grouping small
+new file blocks for small files will be placed adjacently                                  files in a directory represents a significant performance
+to other files in the same directory whenever possible.                                    advantage.
+This should represent a substantial reduction in the num-
+ber of disk requests required for a set of files named by
+a given directory.                                                                         3 Design and Implementation
+   We believe that the relationships inherent in the name
+space can be exploited to successfully realize the per-                                    To better exploit the data bandwidth provided by modern
+formance potential of modern disks’ bandwidths. For                                        disk drives, C-FFS uses embedded inodes and explicit
+example, many applications examine the attributes (i.e.,                                   grouping to co-locate related small data objects. This
+reference the inodes) of files named by a given directory                                  section describes the various issues that arise when ap-
+soon after scanning the directory itself (e.g., revision                                   plying these techniques and how our C-FFS implemen-
+control systems that use modification times to identify                                    tation addresses them.
+files in the source tree that might have changed and di-
+    2 Different applications access files named by a directory in dif-                     3.1                                     Embedded Inodes
+ferent orders. For example, many shell utilities re-order file listings
+alphabetically, while multi-file compile and link programs often apply                     Conceptually, embedding inodes in directories is
+a user-specified ordering. As a result, we also looked at file adjacency                   straightforward. One simply eliminates the previous
+under alternative file sequences. For example, in alphabetical order,                      inode storage mechanism and replaces the inode pointer
+only 16% of directories are adjacent to their first file and only 30% of
+                                                                                           generally found in each directory entry with the in-
+files are adjacent to their predecessor. Even with the best-case ordering
+(by ascending disk block address), only 64% of files are next to their                     ode itself. Unfortunately, a few complications do arise:
+predecessor.                                                                               (1) Finding the location of an arbitrary inode given an
+inode number (and to avoid changing other file system           3. Get the directory’s inode. This may require recur-
+components, this file ID must remain unique) must still            sively executing steps 1, 2, and 3 several times.
+be both possible and efficient. (2) As part of enabling            However, the recursion is always bounded by the
+the discovery of an arbitrary inode’s location, the cur-           root of the directory hierarchy and should rarely
+rent C-FFS implementation replaces inode numbers with              occur in practice, since getting to the file’s inode
+inode locators that include an ID for the containing di-           locator in the first place required looking in the di-
+rectory. One consequence of this approach is that when             rectory. Further, this recursion could be eliminated
+a file is moved from one directory to another, its inode           by exploiting the auxiliary physical location infor-
+locator will change. This can cause difficulties for sys-          mation included in the directory map (see below).
+tem components that are integrated with the file system
+and rely on inode number constancy. (3) Although files          4. Read the directory block that contains the sector
+with links from multiple directories are rare, they are            referred to by the sector number component of the
+useful and should still be supported. Also, files with             inode number. (Note that the sector number is not
+multiple links from within a directory should be sup-              really necessary — it simply allows us to restrict
+ported with low cost, since some applications (such as             the linear scan.)
+editors) use such links for backup management. (4) File
+system recovery after both system crashes and partial           5. Traverse the set of directory entries in the sector to
+media corruption should be no less feasible than with a            find the matching inode information, if it exists.
+conventional file system organization.
+   One of our implementation goals (on which we were          Moving files
+almost successful) was to change nothing beyond the
+directory entry manipulation and on-disk inode access         Because C-FFS stores inodes inside the directories that
+portions of the file system. This section describes how       name them, moving a file from one directory to another
+C-FFS implements embedded inodes, including how               involves also moving the inode. Fortunately, this is easy.
+C-FFS addresses each of the above issues.                     However, because inode locators encode the inode’s lo-
+                                                              cation, including the containing directory’s number, the
+                                                              inode locator must be changed when an inode moves.3
+Finding specific inodes
+                                                              In addition to file movement, C-FFS moves inodes when
+By eliminating the statically allocated, directly indexed     they are named by multiple directories (see below) and
+set of inodes, C-FFS breaks the direct translation be-        when the last name for a file is removed while it is
+tween inode number and on-disk inode location. To             still open (to support POSIX semantics). Unfortunately,
+regain this, C-FFS replaces conventional inode numbers        changing the externally visible file ID can cause prob-
+with inode locators and adds an additional on-disk data       lems for system components, such as an NFS server,
+structure, called the directory map. In our current im-       that relies on constancy of the file ID for a given file.
+plementation, an inode locator has three components: a        Some solutions to this problem that we have considered
+directory number, a sector number within the directory        include not actually moving the inode (and using the
+and an identifier within the sector. C-FFS currently sizes    external link entry type discussed below), keeping an
+these at 16 bits, 13 bits and 3 bits, respectively, provid-   additional structure to correlate the old and new inode
+ing more than an order of magnitude more room for             locators and forcing other system components to deal
+growth in both directory count and directory size than        with the change. We currently use this last solution,
+appears to be necessary from the characteristics of our       but are growing concerned that too many applications
+file server. However, shifting to a 64-bit inode locator      expect file IDs to remain constant.
+would overcome any realistic limitations.                        We currently believe that the correct solution is to
+   To find the inode for an arbitrary inode locator, C-FFS    bring back constant inode numbers and to introduce an-
+uses the following procedure:                                 other table to translate inode numbers to inode locators.
+                                                              Properly implemented, we believe that such a table could
+ 1. Look in the inode cache.                                  be maintained with low cost. In particular, it would only
+                                                              need to be read when a desired inode is not in the inode
+ 2. If the inode is not in the cache, use the directory       cache. Also, by keeping both the inode number and the
+    number portion of the inode locator to index into
+                                                                  3 Note that moving a directory will change the inode locator for the
+    the directory map. This provides the inode locator
+                                                              directory but will not change the inode locators for any of the files it
+    for the directory. A special directory number, 0,
+                                                              names. The inode locators for these latter files encode the directory’s
+    is used to refer to the “directory” containing multi-     identity by its index into the directory map rather than by its inode
+    linked inodes that are not embedded (see below).          locator.
+inode locator in each inode, the table could be considered    counts anyway. In fact, embedded inodes reduce the ef-
+soft state that is reconstructed if the system crashes.       fort involved with verifying the link counts, since extra
+                                                              state need not be kept (a valid embedded inode has a link
+Supporting hard links                                         count of one plus the number of internal links).
+                                                                 The one potential problem that embedding inodes in-
+Although it is rare to have multiple hard links to a sin-     troduces is that an unfortunate media corruption can
+gle file, it can be useful and we want to continue to         cause all files below a corrupted directory to be lost.
+allow it. Therefore, C-FFS replaces the inode pointer         Even though they are uncorrupted, the single way to
+field of conventional directories with a type that can        find them will have been destroyed. This is unaccept-
+take on one of five values: (1) invalid, which indicates      able when compared to the current scheme, which loses
+that the directory entry is just a space holder; (2) em-      a maximum of 64 files or directories when an inode
+bedded, which indicates that the inode itself is in the       block is destroyed. All files that become disconnected
+entry; (3) directory pointer, which indicates that the en-    from the name hierarchy due to such a loss can still be
+try contains a directory number that can be used to index     found. Fortunately, we can employ a simple solution to
+into the directory map to find the corresponding inode        this problem — redundancy. By augmenting the direc-
+locator (this entry type is used only for the special ‘.’     tory map with the physical location of each directory’s
+and ‘..’ entries); (4) internal link, which indicates that    inode, we eliminate the loss of directories and files be-
+the entry contains a pointer to the location of the actual    low a lost directory. Although the absolute amount of
+inode elsewhere within the directory; and (5) external        loss may be slightly higher (because the density of use-
+link, which says that the entry contains a pointer to the     ful information is higher), it should be acceptable given
+location of the inode outside of the directory. Additional    the infrequency of post-factory media corruption.
+space in the directory entry is used to hold the inode or
+pointer for the latter four cases.                            Simplifying integrity maintenance
+   As suggested by the existence of an external link type,
+C-FFS stores some inodes outside of directories. In par-      Although the original goal of embedded inodes was to
+ticular, C-FFS does this for inodes that are named by         reduce the number of separate disk requests, a pleasant
+multiple files and for inodes that are not named but have     side effect is that we can also eliminate one of the se-
+been opened by some process. For the latter case, ex-         quencing constraints associated with metadata updates
+ternalizing an inode is simple because we don’t need to       [Ganger94]. In particular, by eliminating the physical
+guarantee its existence across a system failure. External-    separation between a name and the corresponding inode,
+izing an inode to add a second external link, on the other    C-FFS exploits a disk drive characteristic to atomically
+hand, is expensive in our current C-FFS implementation,       update the pair. Most disks employ powerful error cor-
+requiring two synchronous writes (one to copy the inode       recting codes on each sector, which has the effect of elim-
+to its new home and one to update the directory from          inating (with absurdly high probability)the possibilityof
+which is was moved). Externalized inodes are kept in a        only part of the sector being updated. So, by keeping the
+dynamically-growable, file-like structure that is similar     two items in the same sector, we can guarantee that they
+to the IFILE in BSD-LFS [Seltzer93]. Some differences         will be consistent with respect to each other. For file
+are that the externalized inode structure grows as needed     systems that use synchronous writes to ensure proper
+but does not shrink and its blocks do not move once they      sequencing, this can result in a two-fold performance
+have been allocated.                                          improvement [Ganger94]. For more aggressive imple-
+                                                              mentations (e.g., [Hagmann87, Chutani92, Ganger95]),
+File system recovery                                          this reduces complexity and the amount of book-keeping
+                                                              required.
+One concern that re-arranging file system metadata
+raises is that of integrity in the face of system fail-       Directory sizes
+ures and media corruption. Regarding the first, we
+have had no difficulties constructing an off-line file sys-   A potential down-side of embedded inodes is that the
+tem recovery program much like the UNIX FSCK utility          directory size can increase substantially. While making
+[McKusick94]. Although inodes are no longer at stat-          certain that an inode and its name remain in the same
+ically determined locations, they can all be found (as-       sector, three directory entries with embedded 128-byte
+suming no media corruption) by following the directory        inodes can be placed in each 512-byte sector. Fortu-
+hierarchy. We also do not believe that embedded inodes        nately, as shown in Figure 4, the number of directory
+increase the time required to complete failure recovery,      entries is generally small. For example, 94% of all di-
+since reading the directories is required for checking link   rectories would require only one 8 KB block on our file
+servers. For many of these, embedded inodes actually                  with many free blocks. (The fast file system actually
+fit into space that was allocated anyway (the minimum                 performs directory allocation based on the number of
+unit of allocation is a 1 KB fragment). Still, there are a            free inodes rather than the amount of free space. With
+few directories with many entries (e.g., several of over              embedded inodes, however, this becomes both difficult
+1000 and one of 9000). For a large directory, embedded                and of questionable value.)
+inodes could greatly increase the amount of data that                    The main change occurs in deciding where to place
+must be read from disk in order to scan just the names                the first block (or fragment) of a file. The standard
+in a directory (e.g., when adding yet another directory               approach is to scan the freelist for a free block in the
+entry). We are not particularly concerned about this,                 cylinder group that contains the inode, always starting
+since bandwidth is what disks are good at. However, if                from the beginning. As files come and go, the free re-
+experience teaches us that large directories are a signif-            gions towards the front of the cylinder group become
+icant problem, one option is to use the external inode                fragmented. C-FFS, on the other hand, tries to incor-
+“file” for the inodes of such directories.                            porate the new file block (or fragment) into an existing
+                                                                      group associated with the directory that names the file.
+                                                                      This succeeds if there is free space within one of the
+3.2     Grouping Small Files
+                                                                      groups (perhaps due to a previous file deletion or trun-
+Like embedded inodes, small file grouping is concep-                  cation) or if there is a free block outside of a group that
+tually quite simple. C-FFS simply places several small                can be incorporated without causing the group to ex-
+files adjacently on the disk and read/writes the entire               ceed its maximum size (currently hard-coded to 64 KB
+group as a unit. The three main issues that arise are                 in our prototype, which approximates the knees of the
+identifying the disk locations that make up a group, al-              curves in Figure 2). To identify the groups associated
+locating disk locations appropriately, and caching the                with a particular directory, C-FFS exploits the fact that
+additional group items before they have been requested                using embedded inodes gives us direct access to all of
+or identified. We discuss each of these below.                        the relevant inodes (and thus their group information)
+                                                                      by examining the directory’s inode (which identifies the
+Identifying the group boundaries                                      boundaries of the first group) and scanning the directory
+                                                                      (ignoring any inodes for directories). If the new block
+To better exploit available disk bandwidth, C-FFS moves               extends an existing group, C-FFS again exploits embed-
+groups of blocks to and from the disk at once rather than             ded inodes to scan the directory and update the group
+individually. To do so, it must be possible to determine,             information for other group members. If the new block
+for any given block, whether it is part of a group and,               cannot be added to an existing group, the conventional
+if so, what other disk locations are in the same group.               approach is used to allocate the block and a new group
+C-FFS does this by augmenting each inode with two                     with one member is created.
+fields identifying the start and length of the group.4 Be-               One point worth stressing about explicit grouping is
+cause grouping is targeted for small files, we don’t see              that it does not require all blocks within the boundaries
+any reason to allow an inode to point to data in more than            of a group to belong to inodes in a particular directory.
+one group. In fact, C-FFS currently allows only the first             Although C-FFS tries to achieve this ideal, arbitrary files
+block (the only block for 79% of observed files) of any               can allocate blocks that end up falling within the bound-
+file other than a directory to be part of a group. Identi-            aries of an unrelated group. The decision to allow this
+fying the boundaries of the group is a simple matter of               greatly simplifies the management of group information
+looking in the inode, which must already be present in                (i.e., it is simply a hint that describes blocks that are
+order to identify the disk location of the desired block.             hopefully related). Although this could result in sub-
+                                                                      optimal behavior, we believe that it is appropriate given
+Allocation for groups                                                 the fact that reading/writing a few extra disk blocks has
+                                                                      a small incremental cost and given the complexity of
+Before describing what is different about the allocation              alternative approaches.
+routines used to group small files, we want to stress                    Multi-block directories are the exception to both the
+what is not different. Placement of data for large files              allocation routine described above and to the rule that
+remains unchanged and should exploit clustering tech-                 only the first block of a file can be included in a group.
+nology [Peacock88, McVoy91]. Directories are also                     Because scanning the contents of a directory is a com-
+placed as in current systems, by finding a cylinder group             mon operation, C-FFS tries to ensure that all of its blocks
+   4 Although we have added fields to support grouping in the C-FFS   are part of the first group associated with the directory
+prototype, it would seem reasonable to overload two of the indirect   (i.e., the one identified by the directory’s inode). For-
+block pointers instead and simply disable grouping for large files.   tunately, even with embedded inodes, most directories
+(e.g., 94 percent for our file servers) will be less than                               Specification       Value
+one block in size. If a subsequent directory block must                                   Capacity          1 GB
+be allocated and can not be incorporated into the direc-                                 Cylinders          2700
+tory’s first group, C-FFS selects one of the non-directory                                Surfaces             9
+blocks in the first group, moves it (i.e., copies it to a new                          Sectors/Track          84
+disk location and changes the pointer in the inode), and                               Rotation Speed     5400 RPM
+gives its location to the new directory block. Once again,                              Head Switch          N/A
+this operation exploits embedded inodes to find a mem-                                  One-cyl Seek        1 ms
+ber of the first group from which to steal a block. Unfor-                             Average Seek       9/10.5 ms
+tunately, moving the group member’s block requires two                                 Maximum Seek         22 ms
+synchronous writes (one to write the new block and one
+to update the corresponding inode). A better metadata
+integrity maintenance mechanism (e.g., write-ahead log-                   Table 2: Characteristics of the Seagate ST31200 drive.
+ging or soft updates) could eliminate these synchronous
+writes. When no blocks are available for stealing, C-FFS                  lookups based on disk address, C-FFS uses this mech-
+falls back to allocating a block via the conventional ap-                 anism (rather than clustering or grouping information)
+proach (with a preference for a location immediately                      to identify additional dirty blocks to write out with any
+after the first group).                                                   given block. With this scheme, the main benefit provided
+                                                                          by grouping is to increase the frequency with which
+Cache functionality required                                              dirty blocks are physically adjacent on the disk. C-FFS
+                                                                          uses scatter/gather support to deal with non-contiguity
+Grouping requires that the file block cache provide a                     of blocks in the cache. Were scatter/gather support not
+few capabilities, most of which are not new. In par-                      present, C-FFS would rely on more complicated extent-
+ticular, C-FFS requires the ability to cache and search                   based memory management to provide contiguous re-
+for blocks whose higher level identities (i.e., file ID                   gions of physical memory for reading and writing of
+and offset) are not known. Therefore, our file cache                      both small file groups and large file clusters.
+is indexed by both disk address5 , like the original
+UNIX buffer cache, and higher-level identities, like the
+SunOS integrated caching and virtual memory system                        4 Performance Evaluation
+[Gingell87, Moran87]. C-FFS uses physical identities to
+insert newly-read blocks of a group into the cache with-                  This section reports measurements of our C-FFS im-
+out back-translating to discover their file/offset identi-                plementation, which show that it can dramatically im-
+ties. Instead, C-FFS inserts these blocks into the cache                  prove performance. For small file activity (both reads
+based on physical disk address and an invalid file/offset                 and writes), we observe order of magnitude reductions
+identity. When a cache miss occurs for a file/offset that                 in the number of disk requests and factor of 5–7 im-
+is a member of any group, C-FFS searches the cache                        provements in performance. We observe no negative
+a second time, by physical disk address (since it might                   effects for large file I/O. Preliminary measurements of
+have been brought in by a previous grouped access). If                    application performance show improvements of 10–300
+the block is present under this identity, C-FFS changes                   percent.
+the file/offset identity to its proper value and returns the
+block without an additional disk read.
+                                                                          4.1   Experimental Apparatus
+   The ability to search the cache by physical disk ad-
+dress is also necessary when initiating a disk request for                  All experiments were performed on a PC with a
+an entire group. When reading a group, C-FFS prunes                       120 MHz Pentium processor and 32 MB of main mem-
+the extent read based on which blocks are already in the                  ory. The disk on the system is a Seagate ST31200 (see
+cache (it would be disastrous to replace a dirty block                    Table 2). The disk driver, originally taken from NetBSD,
+with one read from the disk). When writing a group,                       supports scatter/gather I/O and uses a C-LOOK schedul-
+C-FFS prunes the extent written to include only those                     ing algorithm [Worthington94]. The disk prefetches se-
+blocks that are actually present in the cache and dirty.                  quential disk data into its on-board cache. During the
+   Given that C-FFS requires the cache to support                         experiments, there was no other activity on the system,
+    5 By physical disk address, we mean the address given to the device
+                                                                          and no virtual memory paging occurred. In all of our
+                                                                          experiments, we forcefully write back all dirty blocks
+driver when initiating a disk request, as opposed to more detailed
+information about how the cylinder, surface and rotational offset at      before considering the measurement complete. There-
+which the data are stored inside the disk.                                fore, our disk request counts include all blocks dirtied
+by a particular application or micro-benchmark.                  resulting data layouts are somewhat better than those
+   The disk drive used in the experiments is several years       observed on our file server, and therefore should favor
+old and can deliver only one-third to one-half of the            the conventional layout scheme. We do not modify the
+bandwidth available from a state-of-the-art disk (as seen        inode allocation routines in any way, so inodes allocated
+in Table 1). As a result, we believe that the perfor-            in sequence for files in a given directory will tend to
+mance improvements shown for embedded inodes and                 be packed into inode blocks much more densely than
+explicit grouping are actually conservative estimates.           was observed on our server. Again, this favors the con-
+These techniques depend on high bandwidth to deliver             ventional organization. For the non-microbenchmark
+high performance for small files, while the conventional         experiments, we do not do this.
+approach depends on disk access times (which have im-
+proved much less).
+                                                                 4.2    Small File Performance
+   The C-FFS implementation evaluated here is the de-
+fault file system for the Intel x86 version of the exok-            Figure 5 compares the throughput of 1 KB file opera-
+ernel operating system [Engler95]. It includes most of           tions supported by our prototype with embedded inodes,
+the functionality expected from an FFS-like file system.         with explicit grouping, with neither and with both. The
+Its major limitations are that it currently does not sup-        micro-benchmark, based on the small-file benchmark
+port prefetching or fragments (the units of allocation are       from [Rosenblum92], has four phases: create and write
+4 KB blocks). Prefetching is more relevant for large files       10000 1KB files, read the same files in the same or-
+than the small files our techniques address and should           der, overwrite the same files in the same order, and then
+be independent of both embedded inodes and explicit              remove the files in the same order. To avoid the cost
+grouping. Fragments, on the other hand, are very rel-            of name lookups in large directories, the files are spread
+evant and we expect that they would further increase             among directories such that no single directory has more
+the value of grouping, because the allocator would ex-           than 100 entries. In this comparison, both file systems
+plicitly attempts to allocate fragments within the group         are configured to use synchronous writes for metadata
+rather than taking the first available fragment or trying to     integrity maintenance (as is common among UNIX file
+optimize for growth by allocating new fragment blocks.           systems).
+   We compare our C-FFS implementation to itself with               For file creation, we observe a twentyfold reduction in
+embedded inodes and explicit grouping disabled. Al-              the number of disk requests necessary when using both
+though this may raise questions about how solid our              embedded inodes and explicit grouping. This results in
+baseline is, we are comfortable that it is reasonable.           a sevenfold increase in throughput. Half of the reduction
+Comparisons of our restricted C-FFS (without embed-              in the number of disk requests comes from eliminating
+ded inodes or explicit grouping) to OpenBSD’s FFS on             the synchronous writes required for integrity (by mak-
+the same hardware indicate that our baseline is actually         ing the name and inode updates atomic) and half comes
+as fast or faster for most file system operations (e.g.,         from writing the blocks for several new files with each
+twice as fast for file creation and writing, equivalent          disk request. It is interesting to note that half of the disk
+for deletion and reading from disk, and much faster              requests that remain are synchronous writes required be-
+when the static file cache size of OpenBSD limits per-           cause additional directory blocks are being forced into
+formance). The performance differences are partially             the directory’s first group. This cost could be eliminated
+due to the system structure, which links the file sys-           by a better integrity maintenance scheme (see below) or
+tem code directly into the application (thereby avoiding         by not shuffling disk blocks in this way (which could
+many system calls), and partially due to the file sys-           involve a performance cost for later directory scanning
+tem implementation (e.g., aggressively clustering dirty          operations). It is also interesting to observe that C-FFS
+file blocks based on physical disk addresses rather than         with both embedded inodes and explicit grouping sig-
+logical relationships).                                          nificantly outperforms C-FFS with either of these tech-
+   For our micro-benchmark experiments, we wanted to             niques alone (5 times fewer disk requests and 3–4 times
+recreate the non-adjacency of on-disk placements ob-             the create/write throughput).
+served on our file servers. Our simplistic approach was             For file read and overwrite, we observe an order of
+to modify the allocation routines. Rather than allocating        magnitude reduction in the number of disk requests when
+a new file’s first block at the first free location within the   using explicit grouping. This increases throughput by
+cylinder group, we start looking for free space at other         factors of 4.5–5.5. For these operations, embedded in-
+locations within the cylinder group. For half of the files       odes alone provide marginal improvements. However,
+in a directory, we start looking at the last direct block of     embedded inodes do provide measurable improvement
+the previous entry. For the other half, we start looking         when explicit grouping is in use, once again making the
+at a random location within the cylinder group. The              combination of the two the best option.
+                                                                                     DIsk Requests per 1000 Files
+                               600              Conventional                                                        2000
+   Throughput (files/second)
+
+
+
+
+                                                Embedded                                                                                Conventional
+                                                Grouping                                                                                Embedded
+                                                Embed+Group                                                         1500                Grouping
+                               400                                                                                                      Embed+Group
+
+                                                                                                                    1000
+
+                               200
+                                                                                                                    500
+
+
+                                0                                                                                     0
+                                     Create/Write Read        Overwrite Remove                                             Create/Write Read       Overwrite Remove
+
+                                         (a) Files per second                                                              (b) Disk requests per 1000 files
+
+
+                                       Figure 5: Small file throughput when using synchronous writes for metadata integrity.
+                                                                                     DIsk Requests per 1000 Files
+
+
+
+
+                               600              Conventional                                                        2000
+   Throughput (files/second)
+
+
+
+
+                                                Embedded                                                                                Conventional
+                                                Grouping                                                                                Embedded
+                                                Embed+Group                                                         1500                Grouping
+                               400                                                                                                      Embed+Group
+
+                                                                                                                    1000
+
+                               200
+                                                                                                                    500
+
+
+                                0                                                                                     0
+                                     Create/Write Read        Overwrite Remove                                             Create/Write Read       Overwrite Remove
+
+                                           (a) Files/second                                                                 (b) Disk requests/1000 files
+
+Figure 6: Small file throughput when using soft updates for metadata integrity. The “remove” throughput values are
+off the scale, ranging from 1500–2000 files per second.
+    For file deletion, we see a twofold decrease in the                                                         New Partition
+number of disk requests when using embedded inodes,                                                             50% Full
+since embedding the inodes eliminates one of the two                                                            70% Full
+sequencing requirements for file deletion. The second
+                                                                                                                90% Full
+sequencing requirement, which relates to the relation-
+                                                                                           400
+ship between the inode and the free map, remains. The
+
+
+
+
+                                                               Throughput (files/second)
+result is a 250% increase in file deletion throughput,
+provided both by the reduction in the number of disk
+requests and improved locality (i.e., the same block gets                                  300
+overwritten repeatedly as the multiple inodes that it con-
+tains are re-initialized).
+    Because there exist techniques (e.g., soft updates                                     200
+[Ganger94]) that have been shown to effectively elimi-
+nate the performance cost of maintaining metadata in-
+tegrity, we repeat the same experiments with this cost                                     100
+removed. Figure 6 shows these results. We have not yet
+actually implemented soft updates in C-FFS, but rather
+emulate it by using delayed writes for all metadata up-                                     0
+dates — [Ganger94] shows that this will accurately pre-                                          Create/Write   Read   Overwrite   Remove
+dict the performance impact of soft updates. The change
+in performance that we observe for the conventional file
+system is consistent with previous studies.                    Figure 7: Small file throughput with embedded inodes
+    With the synchronous metadata writes removed, we           and explicit grouping after aging the file system. Before
+still observe an order of magnitude reduction in disk          running the small file micro-benchmark (without soft
+requests when using explicit grouping for create/write,        updates), the file system was aged by filling the file sys-
+read and overwrite operations. The result is throughput        tem to a desired capacity and then executing 100000 file
+increases of 4–7 times. Although the performance bene-         create and delete operations. To increase the impact of
+fit of embedded inodes is lower for the create/write phase     the aging, we performed these experiments on a 128 MB
+(because synchronous writes are not an issue), there is        partition. The four bars for each phase represent C-FFS
+still a gain because embedded inodes significantly reduce      performance for a fresh file system, for a 50%-full aged
+the work involved with allocation for explicit grouping.       file system, for a 70%-full aged file system and for a
+As before, the combination of embedded inodes and ex-          90%-full aged file system, respectively.
+plicit grouping provides the highest throughput for both
+the read and overwrite phases. With synchronous writes         distribution measured on our file servers.
+eliminated, file deletion throughput increases substan-
+                                                                  Figure 7 shows performance for the small file micro-
+tially. Although it has no interesting effect on perfor-
+                                                               benchmark after the file system has been aged. As ex-
+mance (because resulting file deletion throughput is so
+                                                               pected, aging does have a significant negative impact
+high), embedding inodes halves the number of blocks
+                                                               on performance. At 70% capacity, the throughputs for
+actually dirtied when removing the files because there
+                                                               the first three phases decrease by 30–40%. However,
+are no separate inode blocks.
+                                                               comparing these throughputs to those reported in the
+                                                               previous section, C-FFS still outperforms the conven-
+4.3    File System Aging                                       tional file system by a factor of 3–4. Further, our current
+                                                               C-FFS allocation algorithms do not reduce or compen-
+To get a handle on the impact of file system fragmen-
+                                                               sate for fragmentation of free extents. We expect that the
+tation on the performance of C-FFS, we use an aging
+                                                               degradation due to file system aging can be significantly
+program similar to that described in [Herrin93]. The
+                                                               reduced by better allocation algorithms.
+program simply creates and deletes a large number of
+files. The probability that the next operation performed
+is a file creation (rather than a deletion) is taken from a    4.4                           Large File Performance
+distributioncentered around a desired file system utiliza-
+tion. After reaching the desired file system utilization for   Although C-FFS focuses on improving performance for
+the first time, the aging program executes some number         small files, it is essential that it not reduce the perfor-
+of additional file operations taken from the same distri-      mance that can be realized for large files. To verify
+bution. The size of each file created is taken from the        that this is the case, we use a standard large file micro-
+                                             Raw Disk
+                                             Conventional
+                                             Embed+Group
+                                                                                                         60
+
+
+
+
+                                                                              Execution Time (seconds)
+                          4
+                                                                                                                Conventional
+  Bandwidth (MB/second)
+
+
+
+
+                                                                                                                Embed+Group
+                          3
+                                                                                                         40
+
+                          2
+
+                                                                                                         20
+                          1
+
+
+                          0                                                                              0
+                              Create/Write      Read             Overwrite                                    pax     rm       gmake   clean
+
+                               Figure 8: Large file bandwidth.               Figure 9: Application performance. “pax” uses the PAX
+                                                                             utility to unpack a compressed archive file containing
+benchmark, which allocates and writes a large (32 MB)                        a substantial portion of the source tree for the default
+file sequentially, reads it sequentially and overwrites it                   exokernel library operating system (about 1000 C files).
+sequentially. The results (shown in Figure 8) allow us                       “rm” uses the UNIX RM utility to recursively remove
+to make two important points. First, using embedded                          the directory tree created by “pax”. “gmake” compiles
+inodes and explicit grouping has no significant effect                       a sub-directory containing 32 C files. “clean” removes
+on large file performance. Second, the C-FFS proto-                          the newly created object files from “gmake”.
+type, which supports clustering of large file data, delivers
+most of the disk’s available bandwidth to applications for                   quired for “gmake” on our exokernel system is currently
+large files. (We believe that the somewhat disappoint-                       250% greater than the corresponding execution time
+ing file write bandwidth values are caused by software                       on OpenBSD. The same absolute improvement given
+inefficiency; we have verified that it is not due to poor                    a baseline equal to that of OpenBSD would represent
+clustering.)                                                                 a 25% reduction in execution time for this compute-
+                                                                             intensive task.
+                                                                                We believe that, for most applications, the name space
+4.5                       Applications                                       provides useful information about relationships between
+Figure 9 shows performance for four different applica-                       files that can be exploited by explicit grouping. How-
+tions which are intended to approximate some of the ac-                      ever, there are some applications (e.g., the web page
+tivities common to software development environments.                        caches of many HTTP browsers) that explicitly random-
+As expected, we see significant improvements (e.g., a                        ize file accesses across several directories in order to
+50–66% reduction in execution time) for file-intensive                       reduce the number of files per directory. For workloads
+applications like “pax” and “rm”. For gmake, we see                          where the name space is a poor indicator of access lo-
+a much smaller improvement of only 10%. While such                           cality, we expect grouping to reduce read performance
+a small improvement could be viewed as a negative re-                        slightly, because it reads from the disk more data than
+sult, we were actually quite happy with it because of                        are necessary.
+the extremely untuned nature of certain aspects of our
+system (which has just barely reached the point, at the
+time of this writing, where such applications can be run                     5 Related Work
+at all). In particular, process creation and shutdown
+(which are used extensively by the “gmake” applica-                          Previous researchers and file system implementors have
+tion) are currently expensive. As a result, the time re-                     been very successful at extracting large fractions of
+disks’ maximum bandwidths for large files. One sim-            riods [Blackwell95], anecdotal evidence, measurements
+ple approach, which does have some drawbacks, is to            of real systems (e.g., [Baker91]), and simulation studies
+increase the size of the basic file block [McKusick84].        (e.g., [Dahlin94]) all suggest that main memory caches
+Another is to cluster blocks (i.e., allocate them con-         have not eliminated read traffic as hoped. Our work at-
+tiguously and read/write them as a unit when appropri-         tempts to achieve performance improvements for both
+ate) [Peacock88, McVoy91]. Enumeration of a large              reads and writes of small files and metadata. While we
+file’s disk blocks can also be significantly improved by       are working within the context of a conventional update-
+using extents (instead of per-block pointers), B+ trees        in-place file system, we could easily see co-location
+[Sweeney96] and/or sparse bitmaps [Herrin93]. We               being used in a log-structured file system to improve
+build on previous work by trying to exploit disk band-         performance when reads become necessary.
+width for small files and metadata.                               One of the extra advantages of embedded inodes
+   To increase the efficiency of the many small disk           is the elimination of one sequencing constraint when
+requests that characterize accesses to small files and         creating and deleting files. There are several more
+metadata, file systems often try to localize logically         direct and more comprehensive approaches to reduc-
+related objects. For example, the Fast File System             ing the performance cost of maintaining metadata in-
+[McKusick84] breaks the file system’s disk storage             tegrity, including write-ahead logging [Hagmann87,
+into cylinder groups and attempts to allocate most             Chutani92, Journal92, Sweeney96], shadow-paging
+new objects in the same cylinder group as related              [Chamberlin81, Stonebraker87, Chao92, Seltzer93] and
+objects (e.g., inodes in same cylinder group as con-           soft updates [Ganger95]. As shown in Section 4, our
+taining directory and data blocks in same cylinder             work complements such approaches.
+group as owning inode). Similarly, several researchers            Of course, there is a variety of other work that has
+have investigated the value of moving the most pop-            improved file system performance via better caching,
+ular (i.e., most heavily used) data to the centermost          prefetching, write-back, indexing, scheduling and disk
+disk cylinders in order to reduce disk seek distances          array mechanisms. We view our work as complementary
+[Vongsathorn90, Ruemmler91, Staelin91]. As described           to these.
+in Section 2, simply locating related objects near each
+other offers some performance gains, but such locality
+affects only the seek time and is thus limited in scope.       6 Discussion
+Co-locating related objects and reading/writing them as
+a unit offers qualitatively larger improvements in perfor-     The C-FFS implementation described and evaluated in
+mance.                                                         this paper is part of the experimental exokernel OS
+   Immediate files are a form of co-location for small         [Engler95]. We have found the exokernel to be an ex-
+files. The idea, as proposed by [Mullender84], is to ex-       cellent platform for systems research of this kind. In
+pand the inode to the size of a block and include the first    particular, our first proof-of-concept prototype was ex-
+part of the file in it. They found that over 60% of their      tremely easy to build and test, because it did not have
+files could be kept with the inode in a single block (and      to deal with complex OS internals and it did not have
+therefore both could be read or written with a single disk     to pay high overheads for being outside of the operating
+request). Another way to look at the same idea is simply       system.
+that the inode is moved to the first block of the file. One       However, the system-related design challenges for file
+potential down-side to this approach is that it replaces       systems in an exokernel OS (which focuses on distribut-
+co-location of possibly related inodes (in an inode block)     ing control of resources among applications) are differ-
+with co-location of an inode and its file data, which can      ent from those in a more conventional OS. An imple-
+reduce the performance of operations that examine file         mentation of C-FFS for OpenBSD is underway, both to
+attributes but not file data. One simple application of        allow us to better understand how it interacts with an
+the basic idea, however, is to put the data for very small     existing FFS and to allow us to more easily transfer it to
+files in the “normally” sized inode, perhaps replacing         existing systems. Early experience suggests that C-FFS
+the space used by block pointers.                              changes some of the locking and buffer management as-
+   The log-structured file system’s answer to the disk         sumptions made in OpenBSD, but there seem to be no
+performance problem is to delay, remap and cluster             fundamental roadblocks.
+all new data, only writing large chunks to the disk               In this paper, we have compared C-FFS to an FFS-like
+[Rosenblum92]. So long as neither cleaning nor read            file system, both with and without additional support for
+traffic represent significant portions of the workload, this   eliminating the cost of metadata integrity maintenance.
+will offer the highest performance. Unfortunately, while       Although we have not yet performed measurements, it is
+it may be feasible to limit cleaning activity to idle pe-      also interesting to compare C-FFS to other file systems
+(in particular, the log-structured file system). We believe   with real applications show performance improvements
+that C-FFS can match the write performance of LFS,            of 10–300 percent.
+so long as the name space correctly indicates logical
+relationships between files. For read performance, the
+comparison is more interesting. C-FFS will perform best       Acknowledgement
+when read access patterns correspond to relationships in
+the name space. LFS will perform best when read access        We thank Kirk McKusick and Bruce Worthington for
+patterns exactly match write access patterns. Although        early feedback on these ideas. We thank Garth Gibson,
+experiments is needed, we believe that C-FFS is likely to     John Wilkes and the anonymous reviewers for detailed
+outperform LFS in many cases, especially when multiple        feedback in the later stages. We also thank the other
+applications are active concurrently.                         members of the Parallel and Distributed Operating Sys-
+   In this paper, we investigate co-locating files based on   tems research group at MIT, especially Héctor Briceño,
+the name space; other approaches based on application-        Dawson Engler, Anthony Joseph, Eddie Kohler, David
+                                                              Mazières, Costa Sapuntzakis, and Josh Tauber for their
+specific knowledge are worth investigating. For exam-
+                                                              comments, critiques and suggestions. In particular,
+ple, one application-specific approach is to group files
+                                                              we thank Costa who, while implementating C-FFS for
+that make up a single hypertext document [Kaashoek96].
+We are investigating extensions to the file system inter-     OpenBSD, has induced many detailed discussions of de-
+face to allow this information to be passed to the file       sign issues related to embedded inodes, explicit grouping
+                                                              and file systems in general. We especially thank Héctor
+system. The result will be a file system that groups files
+                                                              and Tom Pinckney for their efforts as the final deadline
+based on application hints when they are available and
+                                                              approached.
+name space relationships when they are not.
+   Our experience with allocation for small file grouping
+is preliminary, and there are a variety of open questions.    References
+For example, although the current C-FFS implementa-
+tion allows only one block from a file to belong to a         [Baker91] M. Baker, J. Hartman, M. Kupfer, K. Shirriff, J.
+group, we suspect that performance will be enhanced                Ousterhout, “Measurements of a Distributed File Sys-
+and fragmentation will be reduced by allowing more                 tem”, ACM Symposium on Operating Systems Principles,
+than one. Also, C-FFS currently allows a group to be               1991, pp. 198–212.
+extended to include a new block even if it must also in-      [Blackwell95] T. Blackwell, J. Harris, M. Seltzer, “Heuris-
+clude an unrelated block that had (by misfortune) been             tic Cleaning Algorithms in Log-Structured File Sys-
+                                                                   tems”, USENIX Technical Conference, January 1995,
+allocated at the current group’s boundary. We believe,
+                                                                   pp. 277-288.
+based on our underlying assumption that reading an extra
+block incurs a small incremental cost, that this choice is    [Chamberlin81] D. Chamberlin, M. Astrahan, et. al., “A His-
+                                                                  tory and Evaluation of System R”, Communications of
+appropriate. However, measurements that demonstrate
+                                                                  the ACM, Vol. 24, No. 10, 1981, pp. 632–646.
+this and indicate a maximum size for such holes are
+needed. Finally, allocation algorithms that reduce and        [Chao92] C. Chao, R. English, D. Jacobson, A. Stepanov,
+                                                                   J. Wilkes, “Mime: A High-Performance Parallel Stor-
+compensate for the fragmentation of free space caused
+                                                                   age Device with Strong Recovery Guarantees”, Hewlett-
+by aging will improve performance significantly (by 40–            Packard Laboratories Report, HPL-CSP-92-9, Novem-
+60%, according to the measurements in Section 4.3).                ber 1992.
+                                                              [Chutani92] S. Chutani, O. Anderson, M. Kazar, B. Leverett,
+                                                                   W. Mason, R. Sidebotham, “The Episode File System”,
+7 Conclusions                                                      Winter USENIX Conference, January 1992, pp. 43–60.
+                                                              [Dahlin94] M. Dahlin, R. Wang, T. Anderson, D. Patterson,
+C-FFS combines embedded inodes and explicit group-                 “Cooperative Caching: Using Remote Client Memory
+ing of files with traditional FFS techniques to obtain high        to Improve File System Performance”, USENIX Sympo-
+performance for both small and large file I/O (both reads          sium on Operating Systems Design and Implementation
+and writes). Measurements of our C-FFS implementa-                 (OSDI), November 1994, pp. 267–280.
+tion show that the new techniques reduce the number           [Engler95] D. Engler, M.F. Kaashoek, J. O’Toole Jr., “Exok-
+of disk requests by an order of magnitude for standard             ernel: an operating system architecture for application-
+small file activity benchmarks. For the system under               level resource management”, ACM Symposium on Oper-
+test, this translates into performance improvements of             ating Systems Principles, Dec. 1995, pp. 251-266.
+a factor of 5–7. The new techniques have no negative          [Forin94] A. Forin, G. Malan, “An MS-DOS File System
+impact on large file I/O; the FFS clustering still de-              for UNIX”, Winter USENIX Conference, January 1994,
+livers maximal performance. Preliminary experiments                 pp. 337-354.
+[Ganger94] G. Ganger, Y. Patt, “Metadata Update Perfor-        [Peacock88] J.K. Peacock, “The Counterpoint Fast File Sys-
+    mance in File Systems”, USENIX Symposium on Operat-             tem”, USENIX Winter Conference, February 1988,
+    ing Systems Design and Implementation (OSDI), Novem-            pp. 243–249.
+    ber 1994, pp. 49–60.                                       [Quantum96] Quantum Corporation, http://www.quantum.
+[Ganger95] G. Ganger, Y. Patt, “Soft Updates: A Solution to        com/products/atlas2/, June 1996.
+    the Metadata Update Problem in File Systems”, Tech-        [Rosenblum92] M. Rosenblum, J. Ousterhout, “The Design
+    nical Report CSE-TR-254-95, University of Michigan,             and Implementation of a Log-Structured File System”,
+    Ann Arbor, August 1995.                                         ACM Transactions on Computer Systems, 10 (1), Febru-
+[Gingell87] R. Gingell, J. Moran, W. Shannon, “Virtual Mem-         ary 1992, pp. 25-52.
+     ory Architecture in SunOS”, Summer USENIX Confer-         [Rosenblum95] M. Rosenblum, E. Bugnion, S. Herrod, E.
+     ence, June 1987, pp. 81–94.                                    Witchel, A. Gupta, “The Impact of Architectural Trends
+                                                                    on Operating System Performance”, ACM Symposium on
+[Hagmann87] R. Hagmann, “Reimplementing the Cedar File
+                                                                    Operating Systems Principles, Dec. 1995, pp. 285-298.
+    System Using Logging and Group Commit”, ACM Sym-
+    posium on Operating Systems Principles, November           [Ruemmler91] C. Ruemmler, J. Wilkes, “Disk Shuffling”,
+    1987, pp. 155–162.                                             Technical Report HPL-CSP-91-30, Hewlett-Packard
+                                                                   Laboratories, October 3, 1991.
+[Herrin93] E. Herrin, R. Finkel, “The Viva File System”,
+     Technical Report #225-93, University of Kentucky, Lex-    [Ruemmler93] C. Ruemmler, J. Wilkes, “UNIX Disk Access
+     ington, 1993.                                                 Patterns”, Winter USENIX Conference, January 1993,
+                                                                   pp. 405–420.
+[HP91] Hewlett-Packard Company, “HP C2247 3.5-inch
+                                                               [Seagate96] Seagate Technology, Inc., http://www.seagate.
+    SCSI-2 Disk Drive – Technical Reference Manual”, Edi-
+                                                                    com/stor/stortop.shtml, June 1996.
+    tion 1, December 1991.
+                                                               [Seltzer93] M. Seltzer, K. Bostic, M. McKusick, C. Staelin,
+[HP92] Hewlett-Packard Company, “HP C2244/45/46/47 3.5-              “An Implementation of a Log-Structured File System
+    inch SCSI-2 Disk Drive Technical Reference Manual”,              for UNIX”, Winter USENIX Conference, January 1993,
+    Part Number 5960-8346, Edition 3, September 1992.                pp. 201–220.
+[HP96] Hewlett-Packard Company, http://www.dmo.hp.com/         [Seltzer95] M. Seltzer, K. Smith, M. Balakrishnan, J.
+    disks/oemdisk/c3653a.html, June 1996.                            Chang, S. McMains, V. Padmanabhan, “File System
+[Journal92] NCR Corporation, “Journaling File System Ad-             Logging Verses Clustering: A Performance Compar-
+     ministrator Guide, Release 2.00”, NCR Document D1-              ison”, USENIX Technical Conference, January 1995,
+     2724-A, April 1992.                                             pp. 249-264.
+                                                               [Smith96] K. Smith, M. Seltzer, “A Comparison of FFS
+[Kaashoek96] M.F. Kaaskoek, D. Engler, G. Ganger, D. Wal-
+                                                                    Disk Allocation Policies”, USENIX Technical Confer-
+     lach, “Server Operating Systems”, ACM SIGOPS Euro-
+                                                                    ence, January 1996, pp. 15-25.
+     pean Workshop, September 1996, pp. 141-148.
+                                                               [Staelin91] “Smart Filesystems”, Winter USENIX Confer-
+[McKusick84] M. McKusick, W. Joy, S. Leffler, R. Fabry, “A           ence, 1991, pp. 45–51.
+    Fast File System for UNIX”, ACM Transactions on Com-
+    puter Systems, Vol. 2, No. 3, August 1984, pp. 181–197.    [Stonebraker81] M. Stonebraker, “Operating System Sup-
+                                                                    port for Database Management”, Communications of the
+[McKusick94] M. McKusick, T.J. Kowalski, “Fsck – The                ACM, 24 (7), 1981, pp. 412–418.
+    UNIX File System Check Program”, 4.4 BSD System
+                                                               [Stonebraker87] M. Stonebraker, “The Design of the POST-
+    Manager’s Manual, O’Reilley & Associates, Inc., Se-
+                                                                    GRES Storage System”, Very Large Data Base Confer-
+    bastopol, CA, 1994, pp. 3:1–21.
+                                                                    ence, September 1987, pp. 289–300.
+[McVoy91] L. McVoy, S. Kleiman, “Extent-like Performance       [Sweeney96] A. Sweeney, D. Doucette, W. Hu, C. Anderson,
+    from a UNIX File System”, Winter USENIX Conference,            M. Nishimoto, G. Peck, “Scalability in the XFS File Sys-
+    January 1991, pp. 1–11.                                        tem”, USENIX Technical Conference, 1996, pp. 1–14.
+[Moran87] J. Moran, “SunOS Virtual Memory Implementa-          [Vongsathorn90] P. Vongsathorn, S. Carson, “A System for
+    tion”, European UNIX Users Group (EUUG) Confer-                 Adaptive Disk Rearrangement”, Software – Practice and
+    ence, Spring 1988, pp. 285–300.                                 Experience, Vol. 20, No. 3, March 1990, pp. 225–242.
+[Mullender84] S. Mullender, A. Tanenbaum, “Immediate           [Worthington94] B. Worthington, G. Ganger, Y. Patt,
+     Files”, Software–Practice and Experience, 14 (4), April        “Scheduling Algorithms for Modern Disk Drives”, ACM
+     1984, pp. 365–368.                                             SIGMETRICS Conference, May 1994, pp. 241–251.
+[Ousterhout85] J. Ousterhout, H. Da Costa, D. Harrison, J.     [Worthington95] B. Worthington, G. Ganger, Y. Patt, J.
+     Kunze, M. Kupfer, J. Thompson, “A Trace-Driven Anal-           Wilkes, “On-Line Extraction of SCSI Disk Drive Pa-
+     ysis of the UNIX 4.2 BSD File System”, ACM Sympo-              rameters”, ACM SIGMETRICS Conference, May 1995,
+     sium on Operating System Principles, 1985, pp. 15–24.          pp. 146–156.
+

@@ -1,0 +1,338 @@
+                         Appears in the proceedings to Hot Topics in Operating Systems (HOTOS-V)
+
+
+                AVM: Application-Level Virtual Memory
+        Dawson R. Engler                     Sandeep K. Gupta                       M. Frans Kaashoek
+                                   fengler, skgupta, kaashoekg@lcs.mit.edu
+                                    MIT Laboratory for Computer Science
+                                          545 Technology Square
+                                          Cambridge, MA 02139
+
+                      Abstract                                   plify kernel, a number of microkernels [1, 11, 25] have
+     Virtual memory (VM) is a notoriously complicated            put the policy decisions for page-replacement in user-
+abstraction to implement, and is hard to change, spe-            level servers. Unfortunately, many policies in these
+cialize, or replace. Although a certain degree of exi-           systems are still hard-coded (e.g., the page-table struc-
+bility is achieved by user-level pagers, the control they        ture is xed) and the page-servers are often complex
+provide is limited: they leave much of the VM system             and have superuser privilege, making them hard to
+  xed in the kernel, unreachable by the application. As          modify or replace. Other microkernels [12, 17, 21] have
+applications become more diverse and the opportunity             chosen to implement a very restricted virtual mem-
+cost of bad memory policies grows, it is essential for           ory system in order to make the system fast and sim-
+applications to have more control over the VM abstrac-           ple. These systems do not support VM techniques
+tion. In this position paper, we motivate and describe           such as copy-on-write, which can improve application-
+a VM system that is implemented completely at the                performance by an order of magnitude [2, 11, 14].
+application level. To the best of our knowlege this sys-              In summary, current VM systems are either com-
+tem is the first complete example of application-level             plicated and unwieldy, or naive and rudimentary; both
+virtual memory (AVM). AVM allows applications to                 approaches penalize applications. To remedy the situ-
+easily specialize, modify, or even replace the VM ab-            ation, this paper proposes a novel organization of the
+stractions o ered. For example, on architectures with            VM system, application-level VM (AVM), which al-
+software TLB management, applications can even se-               lows applications to set policies by choosing among
+lect their own page-table structures. In addition, AVM           different supplied implementations, or even by imple-
+simpli es the OS kernel, since the kernel only multi-            menting their own VM system. AVM moves the entire
+plexes and does not abstract physical memory. A pro-             VM system out of the kernel into libraries, simplifying
+totype AVM system is implemented for Aegis, an ex-               the kernel implementation. Furthermore, the VM sys-
+perimental exokernel.                                            tem itself is simpler since it does not have to multiplex
+                                                                 multiple entities with a wide range of needs, but can
+                                                                 instead be specialized for particular domains.
+1 Introduction                                                        To support AVM, kernels have to be written dif-
+    Virtual memory is an important, hard-to-                     ferently: instead of abstracting physical memory and
+implement, and performance-critical operating system             TLBs, kernels should safely export and multiplex VM
+abstraction. Many operating systems implement this               resources directly to application level. We call such a
+abstraction completely in the kernel. These systems              kernel an exokernel [9, 10] (to be precise, exokernels
+are typically large, complex, and in flexible, resulting           strive to export all resources, not just those necessary
+in bad performance and poor reliability.                         to support AVM). The AVM system we describe in this
+    To allow some degree of customization and to sim-            paper is built on top of our prototype exokernel, Aegis.
+                                                                 Using this system, applications can choose among mul-
+  This work was supported in part by the Advanced Research       tiple AVM implementations, select their own policies,
+Projects Agency under contracts N00014-94-1-0985 and by a
+NSF National Young Investigator Award. Sandeep Gupta was         modify the VM system, or even craft their own VM ab-
+also supported in part by an ONR Graduate Fellowship.            stractions. This thorough control over the VM system
+
+                                                             1
+enables operations not possible on traditional OSs.            specific paging policy (e.g., LRU, MRU, by priorities).
+    In this paper, we describe the design, implemen-           Furthermore, it can decide what to do with pages that
+tation, and usage of AVM. Section 2 motivates AVM,             are reclaimed. For example, garbage collectors do not
+and Section 3 describes general design issues for its          need to page out scanned pages, since these pages
+implementation, and provides specific examples from             only contain garbage. Unfortunately, since current
+our implementation. In Section 4 we present measure-           OS implementations do not support this optimization,
+ments of this prototype; related work is discussed in          garbage-collection results in a \ urry" of I/O activity,
+Section 5 and we conclude in Section 6.                        because the OS VM system does not realize that while
+                                                               the page has indeed been modified, it contains garbage
+2 Motivation                                                   and so does not need to be stored to disk [7].
+     The reasons why AVM is important can be clas-                 Speci c page allocation. An application's abil-
+si ed according to three general principles. First, OS-        ity to request specific physical pages enables a large
+enforced abstractions of hardware resources hide valu-         number of optimizations. For example, control over
+able information. In a system that supports AVM,               the physical page-numbers allows cache-conscious lay-
+all information is readily accessible (e.g., TLB excep-        out of data to be done in physically mapped caches
+tions can be monitored). Second, OSs have made                 through \page-coloring" techniques [5]. This tech-
+poor trade-o s in the past. Since many trade-o s are           nique is further enabled by the ability of AVM to ap-
+application-dependent, this leads to poor performance          proximate the working set using TLB snapshots [18].
+(an obvious example is LRU or MRU page replacement             Additionally, data and text that exhibit poor locality
+policies). Third, the OS has to be more general and            can be mapped to pages of the same color, restricting
+thus more expensive than a specialized and tuned im-           their pollution of the cache to a specific segment. Ap-
+plementation. For example, support for copy-on-write           plications can also use this functionality to construct
+complicates and slows down the entire memory sys-              contiguous regions of physical memory that are larger
+tem; applications are penalized by decreased reliability       than the hardware page size, improving the eciency
+and performance whether they use this functionality or         of DMA operations [8]. It also allows simpler DMA
+not. AVM allows multiple specialized implementations           hardware to be used, since the hardware does not have
+to co-exist.                                                   to support \scatter-gather" functionality.
+     In this section, we give eleven motivating exam-              Control of page-size. On machines that support
+ples and abstractions for AVM that can be built on             variable page-size mappings [19, 20], AVM can exploit
+top of an exokernel. While many of these could be              application specific knowlege to determine appropriate
+implemented without AVM, their lack in traditional             page sizes (e.g., many of the applications discussed in
+OSs after three decades of virtual memory research             Appel et al. [2] benefit from smaller page sizes).
+suggests that AVM is required if applications are to               DMA. Avoidance of the memory subsystem dur-
+acheive any consistent degree of flexibility.                    ing bulk data transfers can improve performance by
+2.1 Examples                                                   eliminating the e ects of both cache and TLB misses,
+     Fine-grain monitoring. AVM (by necessity)                 and pollution. This optimization can aid many oper-
+gives very precise information about and control over          ations such as networking and garbage-collection, and
+the TLB. This information can be used to derive work-          more common operations such as memcpy().
+ing sets [18] or to trace address streams [22].                    Fine-grain control over virtual memory at-
+     Accurate \in core" information. AVM sys-                  tributes. Giving applications access to the full com-
+tems have total control over virtual memory mappings.          plement of hardware facilities allows precise control
+Their accurate knowledge of which pages are resident           of page information (e.g., reference bits, page-size,
+in memory can be useful to many types of applications.         caching attributes). Reference bits can be used to
+For example, a scienti c program manipulating large            track writes to memory pages (useful for garbage-
+matrices could work on those pieces that are \in core",        collectors [2]). Application-controlled caching can be
+while prefetching others. Garbage collectors can use           used to reduce cache pollution by disabling caching for
+this information as well, by reclaiming only the storage       memory that exhibits poor locality. For example, a log
+which is resident. Finally, this information is critical       that absorbs many writes before being ushed to disk
+to real-time applications, which must meet deadlines           should not be cached, since it needlessly evicts cache
+and cannot be subject to the vagaries of current VM            entries.
+systems.                                                            Fast exception propagation. Fast memory
+     Page replacement policy. Since the AVM sys-               protection traps aid DSM and garbage collection sys-
+tem controls paging, it can implement an application-          tems that use page-protection to detect references [2].
+
+                                                           2
+2.2 Radical New Structures                                     We restrict our discussion to the mechanics of alloca-
+     AVM enables many radical structures to be built.          tion, bootstrapping and revocation.
+We examine a few here.                                              Allocation. The first requirement is that the
+     Di erent address space sizes. With the ad-                AVM system should be able to allocate physical mem-
+vent of 64-bit machines, this consideration becomes in-        ory. An important feature of this allocation is that the
+creasingly important. The page-table mechanisms and            AVM system should be able to ask for specific phys-
+structure used to map a sparse 64-bit address space            ical pages. Aegis supports specific requests for phys-
+(i.e., inverted page-tables) are different from those ap-       ical pages; to allow AVM systems to enumerate the
+propriate for a dense 32-bit address space (e.g., hi-          available pages, the kernel's bitmap of free pages can
+erarchical page-tables). Current OSs x a general-              be mapped into the AVM system's address space as
+purpose page-table implementation, penalizing appli-           read-only. Implicit in allocation is the ability to track
+cations not tting within the parameters used to de-            ownership. Aegis uses self-authenticating capabilities
+rive it. For example, an OS on a 64-bit machine will           for access control. At allocation time, Aegis records
+likely choose a page-table structure that trades space         the owning process and the capabilities it has selected.
+in mapping large address spaces for speed in mapping           The owner of a resource has the power both to change
+small ones. This tradeo is needless, since if page-table       its capabilities and to free it. At all usage or binding
+implementations can be isolated in libraries, applica-         points (e.g., insertion of a virtual to physical mapping
+tions can select (or have selected for them) any one           into the TLB) the AVM must present a capability for
+of an array of page-table structures. For instance, a          the physical memory it is attempting to use. The ex-
+sparse 64-bit address space could use inverted page-           okernel checks that this capability is the required one,
+tables, a 32-bit address space could use hierarchical          and if so allows the operation to continue.
+page-tables, and a protected object comprised solely                Bootstrapping. An exokernel must provide sup-
+of two or three pages can use a simple linear vector.          port for bootstrapping the virtual naming system (i.e.,
+A single-address space OS subsystem may use a com-             supporting translation exceptions on both application
+pletely radical structure; so too might a persistent ob-       page-tables and exception code). Bootstrapping can
+ject store.                                                    be performed in a number of ways. The simplest is
+     Better static fault-isolation techniques.                 to have the operating system map the code and page-
+Control of their address space layout allows applica-          tables. A more ambitious and (potentially) more ex-
+tions to place sensitive state in arbitrary locations.         ible mechanism is to allow the AVM system to do
+This technique can be used for improved fault isola-           the bootstrapping itself by downloading code and data
+tion by reducing the chance that a write or read can           into supervisor mode, where it can access unmapped
+access this state; in a sense, the virtual address is a        physical memory and hence either construct a page-
+capability [24]. Such control can be used to allow ap-         table to map the application's page-table and excep-
+plications to safely import untrusted code (or to guard        tion code, or simply access all of this using unmapped
+against their own buggy algorithms).                           memory. Finally, since accesses to mapped page-tables
+     More ecient dynamic fault isolation. Since               can incur TLB misses, nested TLB miss exceptions
+context identi ers are available to AVM systems, ap-           must be handled.
+plications can create light-weight fault isolation do-              Aegis provides a simple bootstrapping mechanism
+mains within their address space. The address space            through the use of guaranteed mappings. An appli-
+could be split up into protection domains for each iden-       cation's virtual address space is partitioned into two
+ti er, and a protection domain switch would only in-           segments. The first segment holds normal application
+volve a context identi er switch. This can be used to          data and code. The second segment is used to hold ex-
+replace sandboxing or to implement a single-address            ception handling code, page-tables, etc. The exokernel
+space operating system at application-level.                   allows mappings in the second segment to be \pinned"
+     Further motivation and examples can be found              through guaranteed mappings. A miss on a guaran-
+in [2, 11, 14].                                                teed mapping will be handled by Aegis. This frees the
+                                                               application from dealing with the intricacies of boot-
+3 Issues in Designing an AVM                                   strapping the TLB and exception handlers that can
+    To support AVM, the OS must provide the fol-               take TLB misses.
+lowing functionality: allocation of physical memory,                On a TLB miss, the following four actions occur.
+bootstrapping of virtual memory machinery (i.e., TLB           First, Aegis checks which segment the virtual address
+miss code and page-tables), ecient exception pro-             resides in. If it is in the standard user segment, the
+pogation, secure modification of the mapping hard-              exception is forwarded directly to the application. If it
+ware (e.g., TLB) and revocation of physical memory.            is in the second region, Aegis first checks to see if it is
+
+                                                           3
+a guaranteed mapping: if so, it installs the TLB entry         and page-table code without warning and must ensure
+and continues, otherwise it forwards it to the applica-        that translations involving the physical page can be
+tion. Second, the AVM system looks up the virtual              updated, etc. For space reasons, we elide further dis-
+address in its page-table structure, and if the access         cussion; a thorough exploration can be found in [10].
+is not allowed raises the appropriate exception (e.g.,
+\segmentation fault"). If the mapping is valid, the            4 Experiments
+application constructs the appropriate TLB entry and                Our AVM system is approximately 1000 lines of
+its associated capability and invokes the appropriate          heavily commented code. Its two main limitations are
+exokernel system routine. Third, Aegis checks that             that it does not handle swapping and that page-tables
+the given capability corresponds to the access rights          are implemented as a linear vector (address tranlations
+requested by the application. If so, the mapping is            are looked up in this structure using binary search).
+installed; control is then returned to the application.        Barring these two implementation constraints, its in-
+Otherwise an error is returned. Finally, The applica-          terface is richer than other virtual memory systems we
+tion performs cleanup and resumes execution.                   know of: it provides flexible support for aliasing, shar-
+     The obvious challenge in supporting AVM is mak-           ing, disabling and enabling of caching on a per-page
+ing it fast. The primary bottleneck that must be over-         basis, specific page-allocation, DMA, etc.
+come is the cost of TLB re lls. Their overhead can                  We compare Aegis and our AVM system to Ul-
+be reduced either by downloading the AVM system's              trix across seven virtual memory experiments, based
+TLB re ll code into the kernel (this code can be \sand-        upon those listed in [2]. The experiments are done
+boxed" to ensure fault-isolation [23]) or by reducing          within the DECstation/MIPS family. All times are
+the number of TLB misses that the AVM system must              measured using the \wall-clock." All benchmarks were
+handle. Aegis uses the latter approach: it overlays the        compiled using the same compiler and ags, and run in
+hardware TLB with a large software TLB (STLB) to               \single-user" mode. A more complete discussion of the
+absorb capacity misses [3, 13]. On a TLB miss, Aegis           methodology and experiments can be found in [10]. In
+  first checks to see whether the required mapping is in         general, the low-level nature of Aegis allows extremely
+the STLB; if so, Aegis installs it and resumes execu-          ecient tuning of system primitives: for example, it
+tion. Otherwise, the miss is forwarded to the applica-         performs IPC and exception forwarding 10-100 times
+tion.                                                          faster than Ultrix.
+     Currently we use a uni ed STLB. It is a direct-                We perform seven experiments. dirty measures
+mapped, resides in unmapped physical memory, and               the time to query whether a page is \dirty" or not.
+on an STLB \hit", replaces the desired mapping in 18           Since it does not require examination of the TLB, this
+instructions. The STLB is mapped using a well-known            measurement is used to test the base cost of looking
+capability, allowing applications to eciently probe for       up a virtual address in the AVM system's page-table
+entries, etc.                                                  structure. This operation is not provided by Ultrix.
+     Revocation. When physical memory is scarce,               (un)prot1 measures the time required to change the
+the exokernel selects an AVM system to revoke pages            page protection of a single page. prot100 measures the
+from and sends it a revocation interrupt. The AVM              time required to \read-protect" 100 pages. unprot100
+system then selects pages to deallocate (perhaps by            measures the time required to remove read-protections
+using LRU, MRU or some other scheme) and returns               on 100 pages. trap measures the time to take a page-
+them to the exokernel (possibly after writing them             protection trap. appel1 measures the time to access a
+to disk). To prevent future uses, the exokernel then           random protected page and in the fault-handler, pro-
+changes the pages' associated capabilities, and ushes          tect some other page and unprotect the faulting page
+all TLB mappings and any queued DMA requests. In               (this benchmark is \prot1+trap+unprot" in Appel et
+practice, these operations are deferred until the re-          al. [2]). appel2: Time to protect 100 pages, access
+source is actually reallocated.                                each page in a random sequence and, in the fault-
+     To protect against malicious or buggy AVM sys-            handler, unprotect the faulting page (this benchmark
+tems, the exokernel must revoke pages if an AVM sys-           is \protN+trap+unprot" in Appel et al. [2]).
+tem exceeds the time limit it was given to return phys-             dirty measures the average time to parse the
+ical memory. The system's abort protocol is used to            page-table for a random entry. If we compare the time
+determine what action to take if this time-limit bound         required for dirty to the time required to perform
+has been exceeded. To allow a usable system, some              (un)prot1, over half the time in (un)prot1 is due to
+care must be taken in the design of the abort proto-           the overhead of parsing the page-table. This overhead
+col. For example, the kernel must avoid deallocat-             can be directly eliminated through the use of a data
+ing the pages holding the AVM system's exception               structure more tuned to ecient lookup (e.g., a hash-
+
+                                                           4
+           Machine     OS          dirty   (un)prot1        prot100     unprot100     trap   appel1     appel2
+           DEC2100     Ultrix4.2    n/a           51.6           175.          175.   297.       438.      392.
+           DEC2100     Aegis        17.5          32.5           213.          275.   13.9       74.4      45.9
+           DEC3100     Ultrix4.2    n/a           47.8           140.          140.   240.       370.      325.
+           DEC3100     Aegis        13.1          24.4           156.          206.   10.1        55.       34.
+                        Figure 1: Virtual memory benchmarks; times are in micro-seconds
+
+table). Even with this penalty, our system performs               5 Related Work
+these operations close to two times more eciently
+than Ultrix. The likely reason for this difference is                   It is interesting to contrast our AVM with the ap-
+that Aegis dispatches system calls an order of magni-             proach taken by some of the other current extensible
+tude more eciently than Ultrix.                                  operating system projects. In SPIN [4], for example,
+     In general, our exokernel-based system performs              applications achieve greater control over the VM sys-
+well on this set of benchmarks. The sole exceptions               tems by downloading spindles, which are fragments
+                                                                  of user-code written in a pointer-safe language. On
+are prot100 and unprot100. Ultrix is extremely e-                events, such as a page-fault, these spindles are invoked
+cient in protecting and unprotecting contiguous ranges            and undertake application-specific operations. This
+of virtual addresses: it performs 20% to 60% more ef-             approach offers more application control than user-
+  ciently than Aegis in these operations. Part of this            level pagers do, but is more limited than AVM. For ex-
+difference is a direct result of our immature implemen-            ample, the application cannot replace the existing VM
+tation; another appears to be due to the fact that,               abstractions; it can only specialize existing implemen-
+on Aegis, changing page-protections requires access to            tations. In addition, this approach makes the kernel
+two data structures (Aegis' STLB and the AVM sys-                 more complicated, while AVM simpli es the kernel.
+tem's page-table). We anticipate these times improv-
+ing as we tune the system. Fortunately, even with poor                 Many of the ideas we discuss here could be imple-
+performance on these two operations, the benchmark                mented on top of the Caching Kernel [6]. However,
+that depends on this operation, appel2, is close to an            the Caching Kernel is implemented on the Motorola
+order of magnitude more ecient on Aegis than on                  68040, which has hardware page-tables, limiting the
+Ultrix.                                                             flexibility with which page-table structures can be ex-
+     trap is another area where the exokernel system
+                                                                  perimented. Additionally, it is unclear to what degree
+performs extremely well (i.e., 21 to 24 times faster than         applications can control page attributes (e.g., specific
+Ultrix). This performance di erential is achieved even            page requests or caching attributes) or fully exploit the
+though the trap benchmark on Aegis is implemented                 functionality of the memory subsystem (e.g., DMA).
+with standard signal semantics: for example, all caller-          From a more global perspective, the Caching Kernel
+saved registers are saved. If these semantics were vio-           is server-based rather than application-based, limiting
+lated, the performance difference would become even                the per-application specialization. For example, the
+larger. Finally, the higher-level benchmarks, appel1              kernel only supports 16 application kernels simulta-
+and appel2, also show impressive speedup: up to an                neously. Finally, the Caching Kernel has an alarmist
+order of magnitude in some cases and never less than              view of downloading code into the kernel, limiting the
+a factor of ve.                                                     flexibility and eciency of their approach.
+     As these experiments show, an exokernel structure                 User-level pagers allow a rudimentary control over
+coupled with an AVM system can have impressive per-               the VM system by allowing decisions about which
+formance in even simple operations. At first blush the              pages to swap [16]. However, their interface and power
+micro-cost of AVM would seem to add a large over-                 is very limited: they do not allow control over page-
+head to basic memory operations; these benchmarks                 table structure, allocation of specific physical pages,
+show that this assumption is wrong. Additionally,                 or even access to many page attributes (e.g., pagesize
+these numbers are for an immature system and can be               or uncached) [7].
+substantially improved. Two obvious methods would                      The Bridge project attempts to move the virtual
+be to use a more sophisticated page-table and to code             memory decisions into the compiler [15]. This is possi-
+the operations in assembly (the current use of a high-            bly another way to implement many of the features of
+level language requires that time be wasted saving and            AVM. However, not enough details have been provided
+restoring registers at exception time).                           to do a proper comparison of Bridge and AVM.
+
+                                                             5
+6 Conclusions                                                      [12] D. Hildebrand. An architectural overview of QNX. In
+                                                                        Proceedings of the Usenix Workshop on Micro-kernels
+    Application-level VM is a novel virtual memory or-                  and Other Kernel Architectures, April 1992.
+ganization which offers applications complete control               [13] J. Huck and J. Hays. Architectural support for trans-
+over the VM system. Applications can extend exist-                      lation table management in large address space ma-
+ing VM abstractions, specialize them, or even replace                   chines. In Proceedings of the 19th International Sym-
+them. In addition, the AVM system is less compli-                       posium on Computer Architecture, 1992.
+cated than an OS provided VM system, as it does not                [14] Keith Krueger, David Loftesness, Amin Vahdat,
+have to multithread potentially malicious entities. Fi-                 and Thomas Anderson. Tools for development of
+nally, the OS kernel can be simpli ed, because the VM                   application-specific virtual memory management. In
+                                                                        Proceedings of OOPSLA, pages 48{64, October 1993.
+system has been excised from it: the kernel's sole re-             [15] Steven Lucco. High-performance microkernel systems
+sponsibility is to securely multiplex physical memory.                  (abstract). In Proc. of the first Symp. on OSDI,
+References                                                              November 1994.
+                                                                   [16] Dylan McNamee and Katherine Armstrong. Extend-
+ [1] Vadim Abrossimov, Marc Rozier, and Marc Shapiro.                   ing the mach external pager interface to accommodate
+     Generic virtual memory management for operating                    user-level page replacement policies. In Mach Work-
+     system kernels. In Proceedings of the 12th ACM Sym-                shop Conference Proceedings, pages 17{30, Burling-
+     posium on Operating System Principles, pages 123{36,               ton, VT, October 4-5 1990. USENIX.
+     December 1989.
+ [2] A.W. Appel and K. Li. Virtual memory primitives for           [17] S.J. Mullender, G. van Rossum, A.S. Tanenbaum,
+     user programs. In Proceedings of the Fourth Interna-               R. van Renesse, and H. van Staveren. Amoeba: a dis-
+     tional Conference on ASPLOS, pages 96{107, Santa                   tributed operating system for the 1990s. IEEE Com-
+     Clara, CA, April 1991.                                             puter, 23(5):44{53, May 1990.
+                                                                   [18] Theodore H. Romer, Dennis Lee, Brian N. Bershad,
+ [3] K. Bala, M.F. Kaashoek, and W.E. Weihl. Soft-                      and J. Bradley Chen. Dynamic page mapping policies
+     ware prefetching and caching for translation lookaside             for cache con ict resolution on standard hardware. In
+     bu ers. In Proceedings of the First Symposium on                   Proceedings of the First Symposium on OSDI, pages
+     OSDI, pages 243{253, June 1994.                                    255{266, June 1994.
+ [4] B.N. Bershad, C. Chambers, S. Eggers, C. Maeda,               [19] M. Talluri, S. Kong, M.D. Hill, and D.A. Patterson.
+     D. McNamee, P. Pardyak, S. Savage, and E. Sirer.                   Tradeo s in supporting two page sizes. In Proceed-
+     SPIN - an extensible microkernel for application-                  ings of the 19th Annual International Symposium on
+     specific operating system services. TR 94-03-03, Univ.              Computer Architecture, pages 415{424, May 1992.
+     of Washington, February 1994.                                 [20] Madhusudhan Talluri and Mark D. Hill. Surpassing
+ [5] Brian N. Bershad, Dennis Lee, Theodore H. Romer,                   the TLB performance of superpages with less operat-
+     and J. Bradley Chen. Avoiding con ict misses dynam-                ing system support. In Proceedings of the Sixth Inter-
+     ically in large direct mapped caches. In Proceedings of            national Conference on ASPLOS, 1994.
+     the Sixth International Conference on ASPLOS, pages           [21] A.S. Tanenbaum, R. van Renesse, H. van Staveren,
+     158{170, 1994.                                                     G. Sharp, S.J. Mullender, A. Jansen, and G. van
+ [6] D. Cheriton and K. Duda. A caching model of operat-                Rossum. Experiences with the Amoeba distributed
+     ing system kernel functionality. In Proceedings of the             operating system. Communications of the ACM,
+     Sixth SIGOPS European Workshop, September 1994.                    33(12):46{63, December 1990.
+ [7] Eric Cooper, Robert Harper, and Peter Lee. The Fox            [22] Richard Uhlig, David Nagle, Trevor Mudge, and Stu-
+     project: Advanced development of systems software.                 art Schrest. Trap-driven simulation with tapeworm II.
+     Technical Report CMU-CS-91-178, Carnegie Mellon                    In Proceedings of the Sixth International Conference
+     University, Pittsburgh, PA 15213, 1991.                            on Architectural Support for Programming Languages
+ [8] Peter Druschel, Larry L. Peterson, and Bruce S.                    and Operating Systems (ASPLOS-VI), pages 132{144,
+     Davie. Experiences with a high-speed network adap-                 October 1994.
+     tor: A software perspective. In SIGCOMM`94, pages             [23] R. Wahbe, S. Lucco, T. Anderson, and S. Graham.
+     2{13, 1994.                                                        Ecient software-based fault isolation. In Proceed-
+ [9] D. R. Engler, M. F. Kaashoek, and J. O'Toole. The                  ings of the Fourteenth ACM Symposium on Operating
+     exokernel approach to extensibility (abstract). In Pro-            Systems Principles, pages 203{216, 1993.
+     ceedings of the First Symposium on OSDI, November             [24] C. Yarvin, R. Bukowski, and T. Anderson. Anony-
+     1994.                                                              mous RPC: Low-latency protection in a 64-bit address
+[10] Dawson R. Engler. The design and implementation of                 space. In Proceedings of the Summer 1993 USENIX
+     a prototype exokernel operating system. Master's the-              Conference, June 1993.
+     sis, MIT, 545 Technology Square, Boston MA 02139,             [25] M. Young, A. Tevenian, R. Rashid, D. Golub, J. Ep-
+     February 1995.                                                     pinger, J. Chew, W. Bolosky, D. Black, and R. Baron.
+[11] K. Harty and D.R. Cheriton. Application-controlled                 Duality of memory and communication in the im-
+     physical memory using external page-cache manage-                  plementation of a multiprocessor. In Proceedings of
+                                                                        the Eleventh Symposium on Operating Systems Prin-
+     ment. In Proceedings of the Fifth International Con-               ciples, pages 63{67, Austin, TX, Nov. 1987.
+     ference on ASPLOS, pages 187{199, October 1992.
+
+                                                               6
+

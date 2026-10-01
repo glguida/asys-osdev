@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "hardware-expert",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Correctness of the OS against x86 and RISC-V hardware and firmware specifications."
+}

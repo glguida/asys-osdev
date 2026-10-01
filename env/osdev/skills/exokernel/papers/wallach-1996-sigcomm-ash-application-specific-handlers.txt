@@ -1,0 +1,1003 @@
+                                                 Appears in SIGCOMM ’96, August 1996.
+
+
+              ASHs: Application-Specific Handlers for High-Performance Messaging
+                                        Deborah A. Wallach, Dawson R. Engler, and M. Frans Kaashoek
+                                                   M.I.T. Laboratory for Computer Science
+                                                       Cambridge, MA 02139, U.S.A.
+
+                                                              fkerr, engler, kaashoekg@lcs.mit.edu
+
+
+
+
+                                     Abstract                                                   send-response latency). Measurements of a prototype implemen-
+                                                                                                tation of ASHs demonstrate substantial performance benefits over
+Application-specific safe message handlers (ASHs) are designed                                  high-performance implementations of UDP and TCP libraries with-
+to provide applications with hardware-level network performance.                                out ASHs.
+ASHs are user-written code fragments that safely and efficiently ex-                                ASHs are written by application programmers, downloaded into
+ecute in the kernel in response to message arrival. ASHs can direct                             the kernel, and invoked after a message is demultiplexed (i.e., after
+message transfers (thereby eliminating copies) and send messages                                it has been determined for whom the message is destined). The
+(thereby reducing send-response latency). In addition, the ASH                                  most important property of ASHs is that they represent bounded,
+system provides support for dynamic integrated layer processing                                 safe upcalls. ASHs are made safe by controlling their operations
+(thereby eliminating duplicate message traversals) and dynamic                                  and bounding their runtime. Because an ASH is a “tamed” piece
+protocol composition (thereby supporting modularity). ASHs pro-                                 of code, it can be directly imported into the kernel of an operating
+vide this high degree of flexibility while still providing network per-                         system without compromising safety. This ability gives applications
+formance as good as, or (if they exploit application-specific knowl-                            a simple mechanism with which to incorporate domain-specific
+edge) even better than, hard-wired in-kernel implementations. A                                 knowledge into message-handling routines. ASHs provide three
+combination of user-level microbenchmarks and end-to-end sys-                                   key abilities:
+tem measurements using TCP demonstrate the benefits of the ASH
+system.                                                                                         Direct, dynamic message vectoring An ASH dynamically
+                                                                                                controls where messages are copied in memory, and can there-
+1 Introduction                                                                                  fore eliminate intermediate copies. Because most systems do not
+                                                                                                allow application-directed message transfers, messages are copied
+Applications’ complexity and ambition scale with increases in pro-                              into at least one intermediate buffer before being placed in their
+cessing power and network performance. For example, the last                                    final destination.
+few years have seen a proliferation of distributed shared memory
+systems [25, 26, 28], real-time video and voice applications [45],
+parallel applications [11, 34], and tightly-coupled distributed sys-                            Message initiation ASHs can send messages. This ability al-
+tems [2, 36, 39]. Unfortunately, although raw CPU and network-                                  lows an ASH to perform low-latency message replies. The latency
+ing hardware speeds have increased, this increase is not reaching                               of a system determines its performance and scalability; low latency
+applications: networking software and memory subsystem perfor-                                  is especially important for tightly-coupled distributed systems. For
+mance already limit applications and will only do so more in the                                example, the single most important determinant of parallel pro-
+future [10, 13, 39]. This paper addresses the important problem                                 gram scalability is the latency of communication. In the context of
+of delivering hardware-level network performance to applications                                a client/server system, the faster the server can process messages,
+by introducing application-specific safe message handlers (ASHs),                               the less load it has (and, therefore, the more clients it can support)
+which are user-written upcalls [8] that are safely and efficiently                              and the faster the response time observed by clients.
+executed in the kernel in response to a message arrival. ASHs
+direct message transfers (thereby eliminating copies), incorporate                              Control initiation ASHs can perform general computation. This
+data manipulations such as checksumming and data conversions                                    ability allows them to perform control operations at message recep-
+directly into the message transfer engine (thereby eliminating du-                              tion, implementing such computational actions as traditional active
+plicate message traversals), and send messages (thereby reducing                                messages [43] or remote lock acquisition in a distributed shared
+                                                                                                memory system. Even recently, low-overhead control transfer had
+    This work was supported in part by the Advanced Research Projects Agency under
+contract N00014-94-1-0985, by a NSF National Young Investigator Award, by an Intel
+                                                                                                been considered to be infeasible to implement [39].
+Graduate Fellowship Award, and by Digital Equipment Corporation.
+Copyright c 1996 by the Association for Computing Machinery, Inc. Permission to                    We have also integrated support for dynamic integrated layer
+make digital or hard copies of part or all of this work for personal or classroom use is        processing and dynamic protocol composition into the ASH system.
+granted without fee provided that copies are not made or distributed for profit or direct
+
+                                                                                                Dynamic integrated layer processing (ILP)
+commercial advantage and that copies bear this notice and the full citation on the first
+page. Copyrights for components of this work owned by others than ACM must be                                                                      Current systems
+honored. Abstracting with credit is permitted. To copy otherwise, to republish, to post         often have many protocol layers between the application and the
+on servers, or to redistribute to lists, requires prior specific permission and/or a fee.       network, with each layer often requiring that the entire message be
+Request permissions from Publications Dept., ACM Inc., fax +1 (212) 869-0481, or
+(permissions@acm.org).                                                                          “touched” (e.g., to compute a checksum). Therefore, the negotiation
+                                                                                                of protocol layers can require multiple costly memory traversals,
+
+
+                                                                                            1
+stressing a weak link in high-performance networking: the memory             “library” functions and any high-level language that adheres to C-
+subsystems of the endpoint nodes. As argued by Clark and Ten-                style calling conventions and runtime requirements. Second, these
+nenhouse [10], an integrated approach, where these operations are            routines are downloaded into the operating system in the form of
+combined into a single memory traversal, can greatly improve the             machine code, and given to the ASH system. The ASH system
+latency and throughput of a system.                                          post-processesthis object code, ensuring that the user handler is safe
+    ASHs integrate data manipulations such as checksumming or                through a combination of static and runtime checks, then hands an
+conversions into the data transfer engine itself. ASHs automatically         identifier back to the user. Third, the ASH is associated with a user-
+and dynamically perform integrated layering processing (ILP). De-            specified demultiplexor. When the demultiplexor accepts a packet
+spite the fact that ASHs improve flexibility by using protocol lay-          for an application, the ASH will be invoked. The ASH can then
+ers integrated at runtime, dynamic ILP is as efficient as statically-        control where to copy the message to, integrate data manipulations
+written hard-wired ILP implementations.                                      into this copy, and/or send messages.
+                                                                                 Many of the benefits of ASHs can be obtained with a relatively
+Dynamic protocol composition Protocols are the units of mod-                 small amount of support software. ASHs can be completely static,
+ularity in networking. To provide higher level functionality than is         in which case they cannot take advantage of dynamic ILP. This
+provided by any single protocol, they are frequently composed to-            advantage can be gained with the addition of pipes. The further
+gether into protocol stacks. The ASH system provides a simple                addition of protocol composition greatly eases the task of writing
+interface to dynamically compose protocols. Using on-the-fly code            ASHs, allowing protocol fragments to be dynamically and mod-
+generation, these composed protocols are integrated into an efficient        ularly built and composed, at the cost of requiring a fair amount
+data path.                                                                   of support software. This paper explores the use of ASHs in all
+                                                                             three cases: for applications which do not require much data ma-
+    The ASH system has been implemented in an exokernel oper-                nipulation, tiny, extremely fast hand-written static ASHs are most
+ating system [19]. Aegis, an exokernel for MIPS-based DECsta-                appropriate; ASHs using dynamic ILP, on the other hand, are more
+tions, securely exports two network devices: a 10 Mbit/s Ethernet            useful for latency-critical applications which perform a lot of data
+and a 155 Mbit/s AN2 (Digital’s ATM network). On top of the                  manipulation. For applications that dynamically compose proto-
+raw network interface we have implemented several network pro-               cols, ASHs with protocol composition may be used. We describe
+tocols (ARP/RARP, IP, UDP, TCP, HTTP, and NFS) as user-level                 each of the types of ASHs in turn.
+libraries, which are then linked to applications. We demonstrate
+that these user libraries perform well and are competitive with the          2.1 Static ASHs
+best systems reported in the literature. We use a combination of
+user-level microbenchmarks and end-to-end system measurements                Static as well as non-static ASHs are generally written in a stylized
+to demonstrate the benefits of the ASH system. For example, the              form consisting of three parts. The initial part consists of protocol
+use of message initiation and control initiation in ASHs improves            and application code that examines the incoming message to de-
+raw user-level roundtrip latency of an already highly-tuned AN2              termine if the ASH can be run and where the data carried by the
+ATM network from 176 microseconds to 142 microseconds, inde-                 incoming message should be placed. The second part is the data
+pendent of whether the application is scheduled or not. In general,          manipulation part; the data is manipulated as it is copied from the
+we would expect even better performance improvements for using               message buffer (or left in place, if desired). If there are several
+ASHs in other kernels than exokernels, since Aegis has been highly           actions to be taken here, such as a checksum and a copy, integrated
+optimized for fast kernel crossings [19], reducing the benefit of            layer processing as described below can occur at this point. The
+downloading code into the kernel.                                            third and final part again consists of protocol and application code,
+    The remainder of the paper is structured as follows. Section 2           of two types: abort and commit. Which of these is run depends on
+discusses design issues and Section 3 implementation issues for              the initial code and possibly the result of the data manipulation step.
+ASHs. Section 4 describes the experimental environment for eval-             If something goes wrong (for example a checksum fails), the abort
+uating the benefits of ASHs. Section 5 reports on how ASHs can be            code is called to fix up any state that has been updated. If the first
+used and illustrates their benefits. Section 6 relates ASHs to other         two parts completed successfully, on the other hand, the commit
+work. In Section 7 we draw our conclusions.                                  code is called. The commit code performs any operations indi-
+                                                                             cated by the incoming message, including, if appropriate, initiating
+2 Application-speci c safe handlers                                          a message or performing computation.
+                                                                                 Static ASHs are responsible for hand-orchestrating any data
+Once a message is demultiplexed to a particular application, the             manipulations they require.
+message must be delivered to it. There are a variety of actions
+that can be required in a networking system: message vectoring               2.2 ASHs with dynamic ILP
+(e.g., copying a message into its intended slot in a matrix), message
+manipulations (e.g., checksums), message initiation (e.g., message           Simple static ASHs can be extended to use the dynamic ILP support
+reply), and control initiation (e.g., computation). An application-          provided by the ASH system. In addition to simple data copying,
+specific safe message handler (ASH) can perform all of these oper-           many systems perform multiple traversals of message data as ev-
+ations.                                                                      ery layer of the networking software performs its operations (e.g.,
+    ASHs are user-written routines that are downloaded into the              checksumming, encryption, conversion). At an operational level,
+kernel to efficiently handle messages. From the kernel’s point of            these multiple data manipulations are as bad as multiple copies.
+view, an ASH is simply code, invoked upon message arrival, that              To remove this overhead, Clark and Tennenhouse [10] propose in-
+either consumes the message it is given or returns it to the kernel to       tegrated layer processing (ILP), where the manipulations of each
+be handled normally. From a programmer’s perspective, an ASH is              layer are compressed into a single operation. To the best of our
+a routine written in a high-level language and potentially augmented         knowledge, all systems based on ILP are static, in that all integration
+with pipes for dynamic ILP, or it is a series of routines representing       must be hard coded into the networking system. This organization
+protocol layers which will be composed together.                             has a direct impact on efficiency: since untrusted software cannot
+    Operationally, ASH construction and integration has three steps.         augment these operations, any integration that was not anticipated
+First, client routines are written using a combination of specialized        by the network architects is penalized. Given the richness of possi-
+
+
+
+                                                                         2
+                                                                                registers they need and are given control over register class. The
+      // Initialize a pipelist for two pipes                                    two register classes are temporary and persistent. Temporary reg-
+         =
+      pl pipel(2);                                                              isters are scratch registers that are not saved across pipe invoca-
+                                                                                tions. Persistent registers are saved across pipe invocations; they
+      // Create checksum pipe                                                   are used, for example, as accumulators during checksum computa-
+                          =
+      checksum pipe id mk cksum pipe(pl, &pipe cksum);                          tions (pipe cksum in Figure 2). The values of persistent registers
+      // Create byteswap pipe                                                   can be imported and exported from the main protocol code. Export
+                          =
+      byteswap pipe id mk byteswap pipe(pl);                                    is used to initialize a register before use, and import to obtain a
+                                                                                register’s value (e.g., to determine if a checksum succeeded). The
+      // Compile the two pipes,                                                 special register p inputr is reserved to indicate the pipe’s input.
+      // returning a handle to the integrated function                              Current compilers do not optimize networking idioms well.
+          =
+      ilp compile pl(pl, PIPE WRITE);                                           This is mainly due to the fact that there is no clear idiomatic way of
+                                                                                expressing common networking operations such as checksumming,
+ Figure 1: Compose and compile checksum and byteswap pipes.                     byteswapping, memory copies, and unaligned memory accesses
+                                                                                from within even a low-level language such as C. To remedy this
+                                                                                situation, we have extended the VCODE system (to which the pipe
+ble operations, such mismatches happen quite easily. Furthermore,               language is compiled to) to include common networking operations.
+many systems compose protocols at runtime [5, 23, 24, 41, 42],                  Importantly, the VCODE system is low-level enough that further
+making static ILP infeasible. There are additional disadvantages                extensions can be done by clients of the ASH system with little
+to static ILP: static code size is quite large, since it grows with the         performance impact.
+number of possible layers instead of actually used layers, and aug-                 Figure 2 exploits the extension added for computing the Internet
+menting the system with new protocols is a heavyweight operation                checksum. On machines such as the SPARC and the Intel x86, this
+that requires, at least, that the system be recompiled to incorporate           pipe is compiled by VCODE to use the provided add-with-carry
+new operations.                                                                 instructions to efficiently compute the checksum a word at a time.
+    ILP can be dynamically provided through the use of pipes,which              In the given example, the pipe consumes a 32-bit word of data
+were first proposed by Abbott and Peterson [1] for use in static                (using the p input32 instruction), adds its value to the running
+composition. A pipe is a computation written to act on streaming                checksum total along with any overflow (using the p cksum32
+data, taking several bytes of data as input and producing several               instruction), and then outputs it. The ASH that calls this function is
+bytes of output while performing only a tiny computation (such                  responsible for setting up the initial state of the accumulator register,
+as a byte swap, or an accumulation for a checksum). Our ASH                     then later reading it in, and folding it to 16 bits.
+pipe compiler can integrate several pipes into a tightly integrated
+message transfer engine which is encoded in a specialized data                  2.3 ASHs with dynamic protocol composition
+copying loop.
+                                                                                In addition to dynamic ILP, ASH programmers can also use the
+    To allow modular coupling, each pipe has an input and output
+                                                                                dynamic protocol composition extensions provided by the ASH
+gauge associated with it (e.g., 8 bits, 32 bits, etc.). This allows pipes
+                                                                                system. Whereas dynamic ILP provides modularity in terms of
+to be coupled in a distributed fashion; the ASH system performs
+                                                                                pipes (only one checksum routine has to be written, and can be
+conversions between the required sizes. For example, a checksum
+                                                                                composed with any other routine), dynamic protocol composition
+function may take in and generate 16-bit words, while an encryp-
+                                                                                provides modularity in terms of layers (only one IP routine has to
+tion pipe may require 32-bit words. To allow a 16-bit checksum
+                                                                                be written, and can be composed with UDP or TCP).
+pipe’s output to be streamed through a 32-bit encryption pipe, it is
+                                                                                    ASHs written in this style consist of a collection of routines for
+aggregated into a single register.
+                                                                                sending and receiving messages that are dynamically organized into
+    Figure 1 presents an example composition of the checksum
+                                                                                a stack. The layers in the stack are either protocol layer routines
+pipe of Figure 2 with a pipe to swap bytes from big to little endian.
+                                                                                (e.g., UDP) or application specific layers (e.g., a WWW server).
+There are two important points in this figure. First, the composition
+                                                                                Each layer is written in C, heavily augmented with library primitives
+is completely dynamic: any pipe can be composed with any other at
+                                                                                for message manipulation. Although each layer sees a message as
+runtime. Second, it is modular: the ASH system converts between
+                                                                                a stream, receiving part of a message as input and producing one
+gauge sizes and prevents name conflicts by binding the context
+                                                                                as output, the layers are each structured similarly to static ASHs.
+inside the pipe itself, which can be handled as an inviolable object.
+                                                                                A layer has an initial body that is run when a message is being
+    The pipes for ASHs are written in VCODE [17], which is a low-
+                                                                                constructed or consumed and a final body that is run after all bodies
+level extension language designed to be simple to implement and
+                                                                                on a given path have executed. The main data processing occurs
+efficient both in terms of the cost of code generation and in terms
+                                                                                in between the initial and final parts and uses pipes for all data
+of the computational performance of its generated code.
+                                                                                manipulations.
+    The VCODE interface is that of an extended RISC machine:
+                                                                                    Each layer is provided with a set of message primitives to initiate
+instructions are low-level register-to-register operations. A sample
+                                                                                and consume messages, add headers to and strip headers off of
+pipe to compute the Internet checksum [6] is provided in Figure 2.
+                                                                                messages, and reserve header space for information not known
+Each pipe is allocated in the context of a pipe list (pl in the figure)
+                                                                                until an entire message is processed. For example, a UDP receive
+and given a pipe identifier that is used to name it. Additionally,
+                                                                                layer would typically take in a whole UDP message, consume the
+pipes are associated with a number of attributes controlling the
+                                                                                header, and produce the body of the message as output passed up to
+input and output size (a pipe’s “gauge”), whether the pipe is allowed
+                                                                                the next layer. Because layers consume parts of messages, not all
+to transform its input, and whether the pipe is commutative (i.e.,
+                                                                                of the data makes it up to the top of the stack, and different ILP data
+whether it can perform operations on message data out of order).
+                                                                                manipulation loops are generated for different parts of the message.
+These attributes govern how a given pipe is composed with other
+                                                                                    The receive part of each layer is comprised of three procedures:
+pipes (e.g., whether it can be reordered, and the expected input and
+                                                                                a body procedure that does the initial processing and invokes data
+output sizes) and how it can be used.
+                                                                                manipulation operations, and two handlers for the final body—abort
+    Since pipe operations are written in terms of portable assem-
+                                                                                (called if a lower level aborts) and commit (called if all lower levels
+bly language instructions, pipes are charged with allocating those
+
+
+                                                                            3
+      // Specify a pipe to compute the Internet checksum and return its identifier. This specification is subsequently converted
+      // by our system into safe machine code. This code assumes that messages are always a multiple of four bytes long.
+                                         
+      int mk cksum pipe(struct pipel pl, reg t r)    f
+          reg t reg;
+          int pipe id;
+
+           // This checksum works with 32 bits and is both commutative and non modifying (i.e., it does not alter its input).
+          pipe lambda(pl, &pipe id, P GAUGE32, P COMMUTATIVE P NO MOD);       j
+                 =
+              reg p getreg(pl, pipe id, P VAR);           // Allocate an accumulate register (preserved across pipe applications)
+
+             p input32(p inputr);                          // Get 32 bits of input from the pipe
+             p cksum32(reg, p inputr);                     // Add input value to checksum accumulator
+             p output32(p inputr);                         // Pass 32 bits of output to next pipe
+          pipe end();
+          =
+           r reg;
+          return pipe id;
+      g
+                                                   Figure 2: Simple checksum pipe example.
+
+
+succeed). The body procedure can consume the message or, if                       3 Implementation
+necessary, defer processing until the message is certified by the low
+levels. The body procedure can fail, synchronously returning an                   This section describes how we implemented the ASH system. We
+error code to the level that invoked it via deliver; this level is                discuss the support required from the operating system to run ASHs,
+then responsible for handling the failure (potentially by returning               describe the strategies to deal with ASHs that abort, and outline the
+an error in turn to the level that invoked it). After the message                 methods for making ASHs safe. We conclude this section with
+is processed, either abort or commit is invoked. During the body                  implementation caveats.
+processing phase, the ASH system tracks which handlers to call
+by recording the protocol layers invoked. Every time a layer is                   3.1 The operating system model
+activated its handlers are (logically) enqueued on a list. When the
+final phase is initiated, these handlers are called, in FIFO order. A             The most important task we require from the operating system is to
+commit handler is called unless: (1) a lower-level protocol failed,               provide address translation. The primary reason for this requirement
+or (2) a lower-level commit handler failed, in which case the abort               is that virtual memory greatly eases the task of writing ASHs. For
+is propagated upwards (by invoking the abort handlers of bodies                   example, it allows the handlers to execute in the addressing context
+affected by the failure). Higher level protocol body failures are                 of their associated application, and thus directly manipulate user-
+synchronously propagated down; a level receiving notification of                  level data structures. If address translations were embedded within
+a failure above can choose to abort (propagating the failure down                 the handler, such manipulations would be more difficult.
+further) or buffer the data for later and succeed (stopping the chain                  On the MIPS architecture which we have developed the ASH
+of failure propagation). The send part of a layer (if any) is similarly           system, supporting address translation is fairly simple: before ini-
+structured to the receive path, only without an abort handler.                    tiating an ASH, the context identifier and pointer to the page table
+    Figure 3 shows the main body for a very simple ASH that                       of its associated application must be installed. As described below,
+implements naive remote writes [39]. The ASH extracts the mes-                    when an ASH references a non-resident page, or an illegal memory
+sage destination address and length from the message (using the                   address, it is aborted.
+consume library call). It then copies the payload to the destina-                      For efficiency reasons, we can allow addresses to be pre-bound
+tion address, also using the consume call. The message is not                     when the ASHs are imported into the kernel. Pre-binding address
+passed up further. Note that this layer could be the lowest layer                 translations removes the possibility of virtual memory exceptions,
+of a protocol stack, or could sit higher, on top of a UDP layer, for              but complicates the programming model. Additionally, to ensure
+example. This naive handler, appropriate for use only on highly                   correctness, the operating system must track what pages can be
+reliable networks, treats aborts as catastrophes.                                 accessed from the ASH: if any of these pages are deallocated or
+    A server discussed in Section 5 uses integrated ASHs for sending              have their protection changed, then the corresponding memory op-
+and receiving. The receive ASH integrates 3 layers: (1) processing                erations must be retranslated or the ASH must be disabled. We do
+the AAL5 trailer; (2) the computations of IP and TCP checksums;                   not explore this methodology in this paper.
+and (3) an application-specific operation that checks whether the                      Secondary functions that the operating system should provide
+data requested is in the server cache. These three operations are                 (but are orthogonal to our discussion) include memory allocation,
+independently written as three separate layers and then dynamically               page-protection modification, and creation of virtual memory map-
+composed. When a message arrives, it is demultiplexed, the inte-                  pings. To increase the likelihood that memory will be resident when
+grated ASH is run, and if the data is in the cache, it is directly sent           messages arrive, there should be a mechanism by which applica-
+back to the client by the ASH. The send path is also specified as a se-           tions can provide hints to the operating system as to which pages
+ries of layers. This organization allows simple application-specific              should remain in main memory. Applications may also want to be
+operations to be easily and safely integrated in the messaging sys-               able to influence the scheduling policies.
+tem, allowing for high performance and a high degree of flexibility.                   Note that we do not assume that the operating system can field
+                                                                                  ASH-induced exceptions, that ASHs necessarily have access to
+                                                                                  floating point hardware, or that hardware timing mechanisms are
+                                                                                  available. As discussed in Section 3.3, we have designed safety
+                                                                                  provisions to remove the necessity for these functions.
+
+
+                                                                          4
+         // Simplified ASH to copy packets from the network buffer to their given destination address.
+                                                         
+         void simple remote write handler(void ash data, int nbytes)           f
+                              
+             int len; char dst;
+                                                   
+             if (!consume(&dst, sizeof(char ), NULL PIPE))      // Load destination address (first word)
+                 return ASH ABORT;                              // Short message
+             if (!consume(&len, sizeof(int), NULL PIPE))        // Load length (second word)
+                 return ASH ABORT;                              // Short message
+                         < +                   +
+             if (nbytes len sizeof(int) sizeof(char ))         // Incomplete packet
+                 return ASH ABORT;
+             if (!consume(dst, len, NULL PIPE))             // Copy len bytes from (message buffer 8) to (dst).  +
+                 return ASH ABORT;                          // Short or corrupt packet
+             return ASH SUCCESS;                            // Success.
+         g
+                                                                      Figure 3: Example ASH.
+
+
+3.2 The abort protocol                                                              estimations of execution time are overly pessimistic, but simple to
+                                                                                    implement:
+When an ASH cannot complete execution it must abort. There
+are many possible causes of an abort. First, external events (e.g.,
+a device interrupt). Second, malicious or buggy ASH operations
+                                                                                        The base cost of an ASH and its pipes is computed by simply
+                                                                                          counting its total number of instructions.
+(e.g., divide by zero or excessive execution). Third, an ASH abort
+request (e.g., an ASH may need to acquire a lock before continuing                      For every data transfer, we multiply the number of iterations
+execution). Finally, an ASH action (e.g., a page-fault can require                        it performs by the base cost of its associated pipe(s).
+                                                                                        The summation of the static base ASH cost and the dynamic
+that the handler be suspended until that page is resident in main
+memory).
+    The current system only handles voluntary ASH aborts. The                             cost of its data transfer operations is the total cost of the
+ASH itself is responsible for allocating all the resources it will need                   ASH. (Note that the cost of the pipe is a constant, and so this
+before making any permanent changes, as well as fixing up any                             multiplication can be strength-reduced).
+changes that it has made if it decides to abort at some point.
+    We plan to provide the ability to suspend and later restart an
+                                                                                        At runtime, the total cost is computed and then charged to
+                                                                                          the ASH; if the ASH exceeds its budget during execution, it
+ASH (still in the kernel). This ability requires that all of an ASH’s
+                                                                                          is aborted.
+state be saved, including its live registers and the message that it
+was processing. This may require transparent message relocation.                          The total number of cycles consumed can be used in process
+Since all message accesses will be stylized in our eventual system,                       scheduling or in deciding whether to defer ASH invocation.
+relocation of the message should be a straightforward operation.                          On machines with appropriate hardware, cycle counters can
+                                                                                          be used to accurately count handler execution times.
+3.3 Safe execution                                                                  We are currently extending this framework to be less pessimistic in
+For safety, the ASH system must guard against excessive execution                   its execution time estimation.
+time, exceptions, and wild memory references and jumps in ASHs.
+There are various ways to guarantee safety, depending the hardware                  Preventing exceptions Exceptions are prevented either through
+platform being used. For example, the implementation of static                      runtime or download-time checks. Runtime checks are used to pre-
+ASHs for the Intel x86 uses hardware support for segmentation                       vent divide-by-zero errors; unaligned exceptions are prevented by
+and privilege rings to guard ASHs; in this implementation almost                    forcing pointers to be aligned to the requirements of the base ma-
+no software checks are needed.1 The MIPS implementation, in                         chine. Arithmetic overflow exceptions are prevented by converting
+contrast, must use software techniques. We describe these software                  all signed arithmetic instructions to unsigned ones (which do not
+techniques here in detail.                                                          raise overflow exceptions). At download time, we prevent the usage
+     The ASH system for the MIPS bounds execution time using                        of floating-point instructions and protect against wild jumps (we do
+a framework inspired by Deutsch [12]. Exceptions are prevented                      not allow indirect jumps). Many of these checks could be removed
+using runtime and static checks (as is done in existing packet-                     in a more sophisticated implementation that had operating system
+filters [31, 47]). Wild memory references are prevented using a                     support for handler exceptions. With such support, we could opti-
+combination of address-space fire-walls and sandboxing [44]. Wild                   mistically assume exceptions would not happen: if any did occur,
+jumps are prevented using language support. We examine each                         the kernel would then catch them and abort the ASH.
+technique in further detail below.                                                       Address translation exceptions are handled by the operating
+                                                                                    system. In the case of a TLB refill, the operating system replaces
+Bounding execution time Because we want to allow four-                              the required mapping and resumes execution. In the case of accesses
+kilobyte messages to be copied, decrypted, and checksummed, the                     to non-resident pages or illegal addresses, the ASH is aborted.
+instruction budget of the ASHs we describe in this paper is rather
+large (tens of thousands of instructions). This large instruction                   Controlling memory references Addressing protection is im-
+count allows us to achieve implementation simplicity by overesti-                   plemented through a combination of hardware and software tech-
+mating the effects of straight-line code. As a result, our current                  niques. Wild writes to user-level addresses are prevented using the
+  1                                                                                 memory-mapping hardware. As discussed above, when an ASH is
+      David Mazières from MIT designed and implemented the x86 version.
+                                                                                    initiated, its context identifier and page table pointer are installed.
+
+
+
+                                                                                5
+     On the MIPS architecture, code executing in kernel mode can
+                                                                                                   Network          Latency
+read and write physical memory directly. To prevent this, we force
+all non-message loads and stores to have user-level addresses, using                               in-kernel AN2        112
+the code inspection (sandboxing) techniques of Wahbe et al. [44].                                  user-level AN2       176
+                                                                                                   Ethernet             279
+Similarly, we mask the lower bits of memory operations to pre-
+vent unaligned exceptions. Loads of kernel-level message data are
+performed only through specialized function calls: in this way the           Table 1: Raw latency (in microseconds per round trip) for user-level
+sandboxer knows no memory operations to kernel-level data (i.e.,             and in-kernel applications on AN2 and Ethernet.
+the received message buffer) should occur.
+     Making sandboxed data copies efficient is difficult. The ASH
+system therefore requires that messages are accessed through spe-            155 Mbit/s AN2 (Digital’s ATM network). The Ethernet device is
+cialized function calls, preventing user pointers into the message.          securely exported by a packet filter engine [31]. The Aegis imple-
+These calls allow access checks to be aggregated at initiation time.         mentation of the packet filter engine, DPF [18], uses dynamic code
+Experiments show that these checks add little to the base cost of            generation. DPF exploits dynamic code generation in two ways: by
+data transfer operations.                                                    using it to eliminate interpretation overhead by compiling packet
+                                                                             filters to executable code when they are installed into the kernel,
+                                                                             and by using filter constants to aggressively optimize this executable
+3.4 Dynamic code generation                                                  code. DPF is an order of magnitude faster than the highest perfor-
+Dynamic code generation is the generation of executable code at              mance packet filter engines (MPF [47] and PATHFINDER [3]) in
+runtime. We exploit dynamic code generation techniques to effi-              the literature.
+ciently implement dynamic ILP and dynamic protocol composition.                   Similarly to other systems [15, 34, 36], the AN2 device is se-
+The details of the implementation are more fully described in [20].          curely exported by using the ATM connection identifier to demulti-
+                                                                             plex packets. Processes bind to a virtual circuit identifier, providing
+3.5 Implementation caveats                                                   a section of their memory for messages to be DMA’ed to. The ker-
+                                                                             nel and user share a virtualized notification ring per virtual circuit;
+The current system as measured in the rest of the paper has three            by examining this ring an application can determine that a message
+limitations. First, we treat ASH aborts in a very simplistic manner:         arrived and where the message was placed. The application is al-
+we do not save any state that the ASH was using, other than associ-          lowed to use those message buffers directly, as long as it eventually
+ating the ASH with the message that it was working on. However,              returns or replaces them. The buffers are guaranteed never to be
+in many cases this is sufficient, since ASHs can be re-initiated. Sec-       swapped out in our current implementation.
+ond we do not yet provide safe execution for the implementation of                The measurements in this paper are taken on a pair of 40-
+the ASH system as described; we have a simple sandboxer for an               Mhz DECstation 5000/240s, which are rated at 42.9 MIPS and
+earlier implementation but it is incompatible with this implementa-          27.3 SPECint92. The 240 has direct-mapped write-through 64KB
+tion. This affects our performance numbers positively. However,              caches for instructions and data. Memory and I/O devices are
+by now sandboxing is well understood and has proven to result in             accessed over a 25-Mhz TURBOchannel bus. The two DECstation
+little performance overhead. In addition, a sandboxer for ASHs is            240s are connected with an AN2 switch.
+more simple and therefore more efficient than a general sandboxer,                While collecting the numbers reported in this paper, we had
+since ASHs have a restricted instruction set and have restricted ac-         a fair number of problems with cache conflicts (similar to prob-
+cess to other parts of the system. Besides these restrictions, all of        lems reported by others [32]), because the DECstations have direct-
+the operations we discuss are supported: dynamic compilation of              mapped caches. We took two steps in order to minimize the effect
+ASHs, dynamic integration using pipes for data transfer, initiation          these conflicts had on our experiments: first, after examining the
+of messages and message vectoring, and downloading code into the             results from linking object files in many different orders, we picked
+kernel.                                                                      a best-case timing to report, and second, for any set of related exper-
+                                                                             iments, such as the user-level UDP family, we included the identical
+4 Experimental environment                                                   amount of code statically; only the dynamic path through the code
+                                                                             changed. We feel that this methodology provided a fair compar-
+This section reports on the base performance of our system without           ison between the different experiments. If anything, it should be
+ASHs. The next section reports on the benefits of using ASHs. Like           disadvantageous towards the ASH measurements, as they should
+other systems [15, 16, 29, 36, 40], all the protocols are implemented        be less likely to suffer from cache conflicts in a real system than
+in user space. The main point to take from the results in this section       the user-level measurements because the code involved is tightly
+is that our implementation without ASHs performs well and is                 clustered together.
+competitive with the best systems reported in the literature. We
+will discuss in turn the testbed, the raw performance of the network         4.2 Raw performance of base system
+system, and the performance of our user-level implementations of
+UDP and TCP.                                                                 The raw performance of our base system, i.e., without the use of
+                                                                             ASHs, is competitive with other highly optimized systems employ-
+4.1 Testbed                                                                  ing similar hardware.
+                                                                                 Table 1 shows the roundtrip latency achieved using the Ethernet
+We have implemented a system for ASHs in an exokernel operating              and AN2 interfaces to send and receive from user space a 4-byte
+system [19]. Although our implementation is for an exokernel,                message between two DECstation 5000/240s. For this configura-
+ASHs are largely independent of the specific operating system and            tion, the Ethernet number (279 microseconds) is close to the limits
+operating system architecture. They should apply equally well to             measured for user-level low-latency communication in [38]; an ex-
+monolithic and microkernel systems. Similarly, they apply equally            act comparison is complicated since the limits were measured on
+well to in-kernel (e.g., TCP/Vegas), server (e.g., Mach network              DECstation 5000/200s.
+server), or user-level (e.g., U-Net) implementations of networking.              For the AN2 interface, the table also compares the user-level
+    Aegis, an exokernelfor MIPS-based DECstations, provides pro-             version to the best in-kernel version we were able to write. Since the
+tected access to two network devices: a 10 Mbit/s Ethernet and a
+
+
+                                                                         6
+                                                                                                                                                  Implementation                  Latency     Throughput
+                                                                                            120                                                   AN2; in place, no checksum          203           11.61
+                                    15                                                                                                            AN2; in place, with checksum        226            7.42
+Throughput (megabytes per second)
+
+
+
+
+                                                                                                    Throughput (megabits per second)
+                                                                                                                                                  AN2; no checksum                    207            8.84
+                                                                                            100                                                   AN2; with checksum                  228            6.67
+                                                                                                                                                  Ethernet; with checksum             309            1.03
+
+                                                                                            80                                             Table 2: Latency and throughput for UDP over AN2 and Ethernet.
+                                    10
+                                                                                                                                           The latency is measured in microseconds, and the throughput in
+                                                                                                                                           megabytes per second.
+                                                                                            60
+
+                                                                                                                                           fast retransmit, fast recovery, and good buffering strategies). Nev-
+                                     5                                                      40
+                                                                                                                                           ertheless, both the UDP and TCP implementations communicate
+                                                                                                                                           correctly and efficiently with other UDP and TCP implementations
+                                                                                            20
+                                                                                                                                           in other operating systems.
+                                                                                                                                               Tables 2 and 3 show the latency and throughput for different
+                                                                                                                                           implementations of UDP and TCP over the AN2 and the Ether-
+                                     0                                                      0                                              net. On the AN2, the TCP implementation uses the virtual circuit
+                                         0         1024          2048           3072    4096                                               identifier and the ports in the protocol header to demultiplex the
+                                                          Packet size (bytes)                                                              message to the destined protocol control block; the UDP imple-
+                                                                                                                                           mentation currently uses only the virtual circuit index. As observed
+                                                                                                                                           by many others, user-level protocols provide opportunities for op-
+                                    Figure 4: Throughput for a user-level application on the AN2.
+                                                                                                                                           timization not necessarily available nor convenient for traditional
+                                                                                                                                           in-kernel protocols. These tables demonstrate the benefits achiev-
+                                                                                                                                           able through the use of these optimizations. The AN2 in place, no
+  hardware overhead for a round trip is approximately 96 microsec-
+                                                                                                                                           checksum measurements demonstrate the best performance we have
+  onds [34], the kernel software is adding only 16 microseconds of
+                                                                                                                                           achieved for UDP and TCP implemented as user-level protocols. In
+  overhead. The user-level number, which includes the time to sched-
+                                                                                                                                           this case, there are no additional copies from the network interface
+  ule the application, cross the kernel-user boundary multiple times,
+                                                                                                                                           to application data structures and the implementation relies on the
+  and use the full system call interface we designed for the board, adds
+                                                                                                                                           CRC computed by the AN2 board for checksumming. To simulate
+  another 64 microseconds, which brings the total software overhead
+                                                                                                                                           the lack of additional copies, the code throws away the application
+  to 80 microseconds, or about 3,200 cycles.
+                                                                                                                                           data in the in place versions (this true zero-copy can actually be
+      Figure 4 is a graph of the bandwidth obtainable in our system
+                                                                                                                                           achieved; with our user-level AN2 interface the application can be
+  by sending a large train of packets of different sizes from user
+                                                                                                                                           informed where the data has landed, and can use the data directly out
+  level. The maximum achievable per-link bandwidth is about 16.8
+                                                                                                                                           of that buffer, as long as it replaces the buffer with some other one).
+  MBytes/second (134 Mbits/second) [34]. At a 4-Kbyte packet size,
+                                                                                                                                           For the non-in place versions of our measurements, the application
+  we reach 16.11 MBytes/second.
+                                                                                                                                           and the protocol library are separated by a traditional read and write
+      These raw numbers are competitive with other high-performance
+                                                                                                                                           interface, resulting in an additional copy between the network and
+  implementations that also export the network to user space. Scales
+                                                                                                                                           application data structures. For internetworks, the no checksum
+  et al. [34] measure about twice as much software overhead (7,600
+                                                                                                                                           implementations are clearly inadequate because they does not offer
+  cycles or 34 microseconds) for a null packet send using their
+                                                                                                                                           an end-to-end checksum. We thus also present measurements with
+  pvm send and pvm receive interface using the same ATM
+                                                                                                                                           end-to-end checksumming. In the with checksum measurement, the
+  board, with a substantially faster machine (a 225-MHz DEC 3000
+                                                                                                                                           protocol library copies the data from the network to the applica-
+  Model 700 AlphaStation rated at 157 SPECint92). Our absolute
+                                                                                                                                           tion data structures and also computes the Internet checksum. This
+  numbers are higher than U-Net (176 vs 66 microseconds), since
+                                                                                                                                           last implementation is closest to what one might expect from an
+  our experiments are taken on slower machines (40-Mhz vs. 66-
+                                                                                                                                           hard-coded in-kernel implementation.
+  Mhz), the AN2 hardware latency is higher than the Fore latency (96
+                                                                                                                                               Table 2 shows the latency and throughput for different imple-
+  microseconds vs. 42 microseconds), and we have not attempted
+                                                                                                                                           mentations of UDP over AN2 and Ethernet. Latency is measured
+  to rewrite the AN2 firmware to achieve low latency, as was done
+                                                                                                                                           by ping-ponging 4 bytes. Throughput is measured by sending a
+  for U-Net [36]. Direct comparisons with other high-performance
+                                                                                                                                           train of 6 maximum-segment-size packets (1,500 bytes for Ethernet
+  systems such as Osiris [15] and Afterburner [16] are difficult since
+                                                                                                                                           and 3,072 bytes for AN2) and waiting for a small acknowledgment.
+  they run on different networks and have special purpose network
+                                                                                                                                           Using larger train sizes increases the throughput.
+  cards, but our implementation appears to be competitive.
+                                                                                                                                               On the Ethernet, both UDP latency and throughput are modulo
+                                                                                                                                           process speed differences about the same as the fastest implemen-
+  4.3 Internet protocols                                                                                                                   tation reported in the literature [38]. Using the AN2 interface, UDP
+                                                                                                                                           latencies are about 31 microseconds higher than the raw user-level
+  On top of the raw interface we have implemented several network
+                                                                                                                                           latencies. This difference is because the UDP library allocates send
+  protocols (ARP/RARP, IP, UDP, TCP, HTTP, and NFS) as user-
+                                                                                                                                           buffers, and initializes IP and UDP fields. Our implementation
+  level libraries, which are then linked to applications. The general
+                                                                                                                                           seems to have lower overhead than U-Net [36]; the U-Net imple-
+  structure is similar to other implementations of user-level proto-
+                                                                                                                                           mentation adds 73 microseconds on a 66-Mhz processor while our
+  cols [16, 36]. The UDP implementation is a straightforward im-
+                                                                                                                                           implementation adds 52 microseconds on a 40-Mhz processor (even
+  plementation of the UDP protocol as specified in RFC768. Sim-
+                                                                                                                                           though, unlike their numbers, our checksum and memory copy are
+  ilarly, the TCP implementation is a library-based implementation
+                                                                                                                                           not integrated for this measurement). The bandwidth is mostly a
+  of RFC793. We stress that the TCP implementation is not fully
+                                                                                                                                           function of the train size used in the experiment. With a large
+  TCP compliant (it lacks support for fluent internetworking such as
+                                                                                                                                           enough train the UDP experiment achieves nearly the full network
+
+
+                                                                                                                                       7
+       Implementation                  Latency     Throughput                                single copy   double copy     double copy
+       AN2; in place, no checksum          333           6.08                                                              (uncached)
+       AN2; in place, with checksum        364           4.44                                         20             14             11
+       AN2; no checksum                    333           5.46
+       AN2; with checksum                  364           4.10                  Table 4: Throughput for copies of 4096 bytes of data: single copy,
+       Ethernet; with checksum             412           1.04                  two consecutive copies (data in cache), two consecutive copies with
+                                                                               intervening cache flush. Throughput is measured in megabytes per
+Table 3: Latency and throughput for TCP over AN2 and Ethernet.                 second.
+The latency is measured in microseconds, and the throughput in
+megabytes per second.
+                                                                               include the cost for dynamically composing ASHs.
+                                                                                    ASHs can be used for a number of purposes. Some require that
+bandwidth.                                                                     the ASH is executed in the kernel; for others, ASHs can be run in
+    Table 3 shows the latency and throughput for different imple-              user space. In the experiments we attempt to separate out the addi-
+mentations of TCP over AN2 and Ethernet. Latency is measured                   tional benefits of downloading and running an ASH in the kernel.
+by ping-ponging 4 bytes across a TCP connection. Throughput is                 It should be noted that the results of our experiments greatly under-
+measured by writing 10 MBytes in 8-Kbyte chunks over the TCP                   estimate the benefits of running ASHs in any other kernel, because
+connection. For the AN2 the maximum segment size is 3,072 bytes                kernel crossings in Aegis have been highly optimized: Aegis ker-
+and for the Ethernet the maximum segment size is 1,500 bytes.                  nel’s crossings are five times better than the best reported numbers
+For both networks the window size was fixed at 8 Kbytes. Larger                in the literature and are an order of magnitude better than a run-of-
+window size increases the throughput. Except during connection                 the-mill UNIX system like Ultrix [19]. For example, the advantage
+set up and tear down, all segments were processed by the header-               of running an ASH in the Aegis exokernel versus running an ASH
+prediction code.                                                               in user space is 34 microseconds; in a system like Ultrix this differ-
+    The difference between UDP and TCP latency is mostly ac-                   ence would be more like 130 microseconds (the approximate cost
+counted for by the fact that the write call (i.e., sending) is syn-            of an exception plus the system call back into the kernel).
+chronous (i.e., write waits for an acknowledgment before returning);
+as a result the data that is piggybacked on the acknowledgment has
+to be buffered until the client calls read (which leads to an additional
+                                                                               5.1 High throughput
+copy in our current implementation). In addition, the overhead of              High data transfer rates are required by bulk data transfer operations.
+returning out of the write call and starting the read call cannot be           Unfortunately, while network throughput and CPU performance
+hidden. Finally, there is some amount of non-optimized protocol                have improved significantly in the last decade, workstation memory
+processing (checking the validity of the segment received and run-             subsystems have not. As a result, the crucial bottleneck in bulk data
+ning header-prediction code). The sources of overhead, together                transfer occurs during the movement of data from the network buffer
+accounting for about 130 microseconds, seem also to account for                to its final destination in application space [10, 13]. To address this
+most of the difference in latency with U-Net, which adds a total               bottleneck, applications must be able to direct message placement,
+of 20 microseconds (on a 66-Mhz machine) over their UDP imple-                 and to exploit ILP during copying. We examine each below.
+mentation.
+    In summary, the base performance of our system for UDP and                 5.1.1 Avoiding message copies
+TCP is in the same ballpark or is better than most high-performance
+user-level and in-kernel implementations [15, 16, 21, 29, 40].                 Message copies cripple networking performance [1, 10, 39]. How-
+                                                                               ever, most network systems make little provision for application-
+5 Using application-speci c handlers                                           directed data transfer. This results in needless data copies as in-
+                                                                               coming messages are copied from network buffers to intermediate
+In this section, we examine how application-specific safe handlers             buffers (e.g., BSD’s mbufs [27]) and then copied to their eventual
+can be exploited to achieve good throughput, data transfer latency             destination. To solve this problem, we allow an ASH to control
+and control transfer latency. Many of our experiments are influenced           where messages are placed in memory, eliminating all intermediate
+by Clark and Tennenhouse [10].                                                 copies. Our general computational model provides two additional
+    We use a combination of user-level microbenchmarks and end-                benefits. First, these data transfers do not have to be “dumb” data
+to-end system measurements. The microbenchmarks gauge the                      copies: ASHs can employ a rich “scatter-gather” style, and use
+individual effects of, for example, avoiding copies, while the system          dynamic, runtime information to determine where messages should
+measurements give insight into the end-to-end performance effects.             be placed, rather than having to pre-bind message placement. Sec-
+The user-level microbenchmarks measure throughput in megabytes                 ond, in the context of a highly active gigabit per second network,
+per second for operations performed on 4096 bytes of data. We                  tardy data transfer can consume significant portions of memory for
+assume that the message and its application-space destination are              buffering: the quick invocation of ASHs allows the kernel buffering
+not cached when the message arrives, and so perform cache flushes              constraints to be much less.
+at every iteration. The network send and receive buffers are modeled               Copying messages multiple times dramatically reduces the max-
+as a simple buffers in memory.                                                 imum throughput. We can see this by measuring the time to:
+    The end-to-end measurements are taken on the system de-                    (1) copy data a single time, (2) copy data two times, where the
+scribed in the previous section. Because TCP is important, well-               data is in the cache for the second copy, and (3) copy data twice,
+documented, and widely-used, we try to illustrate the benefits of              where the data is not in the cache for the second copy. Table 4
+ASHs using TCP. Also, as pointed out by Braun et al. [7], it is                demonstrates that a second copy degrades throughput by a factor
+important to evaluate ILP in a complete protocol environment. For              of 1.4 for cached data, and by a factor of two for uncached, as
+most of our experiments we used dynamic ILP but not protocol                   expected. We can observe this effect even in our UDP and TCP im-
+composition in order to separate out the cost of dynamically com-              plementations: the throughput for the no checksum version of UDP
+posing ASHs. The end-to-end measurements of the server,however,                increases by a factor of 1.2–1.3 when the copy from the network
+                                                                               buffers into to the application’s data structures is eliminated.
+
+
+                                                                           8
+                                copy &     copy & checksum
+        Method                checksum        & byteswap                                    Network     With ASH       Without ASH
+        Separate                     11                  5.8                                AN2               142               176
+        Separate / uncached          10                  5.1
+        C integrated                 16                  8.3                 Table 6: Raw roundtrip times for remote increment (in microsec-
+        ASH (DILP)                   17                  8.2                 onds) with and without ASHs.
+
+Table 5: Cost of integrated and non-integrated memory operations.
+Throughput is measured in megabytes per second.                                           Measurement      With ASH      Without ASH
+                                                                                          Latency                347              364
+                                                                                          Throughput            4.52             4.10
+    The ASH system’s data transfer mechanism enables applications
+to exploit the capabilities of the network interface in avoiding data        Table 7: Latency (microseconds) and throughput (megabytes per
+transfer. For interfaces such as the Ethernet, the network buffers           second) for TCP on AN2 with and without ASHs.
+available to the device to receive into are limited, and therefore a
+message must not stay in them very long. In this case, at least
+one copy is always necessary. Through the use of an ASH, the                 An ASH can run when the following constraints are satisfied: the
+application can ensure that the copy is to its own data structures,          packet is “expected” (the packet we receive is the one we have
+and that no further copies are needed. The AN2 network interface             predicted), the user-level TCP library is not currently using that
+card, on the other hand, can DMA messages into any location in               TCB (concurrency control), and the TCP library is not behind in
+physical memory. An application which does not need to move                  processing, so that messages stay in order. If these constraints are
+message data into its own data structures, but which can instead             not satisfied, the ASH aborts and the message is handled by the
+use it wherever it has landed, can take advantage of this feature.           user-level library. When the header prediction constraint is met, the
+Applications which require the data be copied, on the other hand,            ASH nearly never needs to abort for the other reasons (non-header-
+can use ASHs to do so; furthermore, through the use of dynamic               prediction-related aborts occurred less than 0.5% of the time in our
+ILP, they can ensure that the copy is integrated with whatever other         latency and throughput experiments). As shown in Table 7, the
+data manipulation may be required.                                           use of ASHs enables a 17 microsecond improvement in latency,
+                                                                             and a .4 MByte/second gain in throughput, providing performance
+5.1.2 Integrated layer processing                                            better than the in place, with checksum experiment of Table 3. The
+                                                                             improvement in latency occurs despite the fact that no messages are
+    The performance advantage of ILP-based composition is shown              initiated from the TCP ASH during the latency experiment.
+in Table 5, which measures the benefit of integrating checksum-                   To estimate the cost of sandboxing for a complete implemen-
+ming and byteswapping routines into the memory transfer opera-               tation of the ASH system, we have compared the ASH time for a
+tion. This experiment compares two data manipulation strategies              generic untrusted remote write to that for an application-specific
+for two operations: copy with checksum, and copy with checksum               remote write in isolation without the cost of communication, using
+and byteswap. The first strategy is non-integrated processing, or            the simple sandboxer we developed for an earlier implementation
+separate, representing the case where data arrives and is copied,then        of the ASH system (see Section 3.5). The remote write, modeled
+checksummed, then possibly byteswapped. We show two varieties                after that of Thekkath et al. [39], reads the segment number, offset,
+of this experiment. The uncached case represents what happens if             and size from the message, uses address translation tables to deter-
+much time occurs in between the various data manipulation oper-              mine the correct place to write the data to, and then writes the data
+ations, and the message gets flushed from the cache. The second              (assuming the request is valid). The application-specific version
+data manipulation strategy explored is integrated processing. The C          not only assumes the message was sent by a trusted sender, but also
+integrated case represents hand-integrated loops written in C. The           uses a different protocol for communication: the handler assumes
+final case is dynamic ILP, using just the checksum pipe of Figure 2          it is given a pointer to memory, instead of a segment descriptor
+for copy & checksum and the composition of the checksum pipe                 and offset. This protocol would clearly not be applicable for all
+and a byte swapping pipe, composed as shown in Figure 1 for copy             applications, but those that could benefit by it (such as a distributed
+& checksum & byteswap.                                                       shared memory system comprised of trusted threads) should not be
+    Even when compared to the separate case which does not have              forced into a more expensive model.
+a cache flush between the data manipulation operations, integration               We found the overhead of sandboxing for 40-byte writes to be
+provides a factor of 1.4 performance benefit, and is clearly worth-          0–13%, and for 128 bytes 3–7%. We strongly emphasize that these
+while. In the case where there is a flush, integration provides a            overheads are for a very rudimentary implementation of sandbox-
+factor of 1.6 performance improvement. The table also demon-                 ing: we sandbox every load and store, rather than only register
+strates that our emitted copying routines are very close in efficiency       definitions. An examination of the generated code shows that even
+to carefully hand-optimized integrated loops.                                simple flow analysis is sufficient to remove almost all sandboxing
+                                                                             instructions, thereby reducing sandboxing overhead to an unimpor-
+5.2 Low-latency data transfer                                                tant fraction of runtime.
+                                                                                  As this data shows, when performing the same operation, ASHs
+The need for low-latency data transfer pervades distributed systems.         are very close in performance to hand-crafted routines. Further-
+The use of ASHs allows applications to quickly respond to messages           more, since ASHs can utilize application-specific knowledge, they
+without paying the high cost of application upcalls.                         can be implemented more efficiently than inflexible kernel routines.
+    In Table 6 we measure the effects of ASHs on raw roundtrip               For example, because it can exploit application semantics (i.e., an
+times for a simple remote increment message. The ASH receives a              organization of trusted peers in a distributed shared memory sys-
+message, performs an increment, then responds with another mes-              tem), the specialized remote write facility is approximately 12%
+sage. This experiment also demonstrates the low cost of control              faster than the “in-kernel” untrusted remote write facility.
+transfer and message initiation in our system.
+    Our TCP implementation allows ASHs to lower the cost of data
+transfer by downloading the common-case fast path in the kernel.
+
+
+                                                                         9
+5.3 Control transfer                                                                                         1500
+Low-latency control transfer is also crucial to the performance of
+                                                                                                                            user-level code
+tightly-coupled distributed systems. Examples include remote lock
+                                                                                                                            code using ASHs
+allocation, reference counting, voting, global barriers, object loca-
+tion queries, and method invocations. The need for low-latency
+
+
+
+
+                                                                               Microseconds per round trip
+remote computation is so overwhelming that the parallel commu-
+nity has spawned a new paradigm of programming built around the
+concept of active messages [43]: an efficient, unprotected transfer                                          1000
+of control to the application in the interrupt handler.
+     A key benefit of ASHs is that because the runtime of downloaded
+code is bounded,they can be run in situations when performing a full
+context switch to an unscheduled application is impractical. ASHs
+thus allow applications to decouple latency-critical operations such
+as message reply from process scheduling. Past systems precluded                                             500
+protected, low-latency control transfer, or heavily relied on user-
+level polling to achieve performance (e.g., in U-Net using signals
+to indicate the arrival of a message instead of polling adds 30 mi-
+croseconds to the 65-microsecond roundtrip latency [36]). The cost
+of control transfers is sufficiently high that recently a dichotomy
+has been drawn between control and data transfer in the interests of
+constructing systems to efficiently perform just data transfer [39].                                           0
+ASHs remove the restrictive cost of control transfer for those oper-                                                1   2      3      4       5   6       7   8
+ations that can be expressed in terms of ASHs. We believe that the
+                                                                                                                             Number of active processes
+expressiveness of ASHs is sufficient for most operations subject to
+low-latency requirements.
+     As a simple experiment to illustrate the advantages of decou-             Figure 5: As the number of processes on the system increases, the
+pling latency-critical operations from scheduling a process,we com-            cost of waiting for a process to be scheduled becomes increasingly
+pare executing code in an in-kernel ASH versus in a user-level                 higher; times are in microseconds per roundtrip.
+process while increasing the number of user processes. In the ex-
+periment, the user-level processes are scheduled round-robin. As
+shown in Figure 5, as the number of active processes increases,                UDP version does not set up and tear down connections. We have
+the latency for the roundtrip remote increment increases, because              downloaded the UDP version into the kernel and run it as an ASH.
+the scheduler is not integrated with the communication system,                 The TCP version has also been dynamically composed, but has only
+and does not know to increase the priority of a process that has a             been tested in user space.
+message waiting for it. When ASHs are used, on the other hand,                     The ASH system dynamically composes the three layers, inte-
+the roundtrip time for the remote increment stays nearly constant,             grates copying and checksumming, and executes the resulting code
+despite the increase in the number of processes. A more sophisti-              on message arrival. If the web page is in the main-memory cache,
+cated scheduler that raises the priority of a process immediately on           the server sends a reply message directly out of the ASH. If the ASH
+a network interrupt would reduce the measured effect, but is not a             aborts (e.g., because the requested web page is not in the cache),
+general solution either (e.g., if the message is not latency critical).        the message is delivered to the server process, which can load the
+     Even when the destined process is running and polling the net-            requested page, install it in the cache, and then reply. Although the
+work, ASHs can still provide benefit. The user-level raw latency               server is quite simplistic, its basic operation is like any other server.
+experiment was performed under scheduling conditions highly fa-                    We have measured the latency to serve one kilobyte web pages
+vorable to the application: there was only one user process running            using our dynamically composed UDP server. The latency per re-
+(the application sitting in a tight poll loop). As shown by the remote         quest, 660 microseconds, is almost exactly equal to the latency per
+increment experiments of Table 6, the use of ASHs still provided               request of the same server implemented in user space with static
+great benefit, eliminating the system call overhead, the cost of the           protocols. This data shows that even with an untuned implemen-
+full context switch to the application, and several writes to the AN2          tation of ASHs, protocol composition can be performed at runtime
+board.                                                                         without a performance penalty.
+
+5.4 Dynamic protocol composition: a simple server                              6 Related work
+One of the unique properties of the ASH system is that it pro-                 Upcalls ASHs can been viewed as a restricted form of Clark’s
+vides mechanisms for efficient dynamic protocol composition. For               upcalls [8]. ASHs are intended primarily for simple, small-latency
+example, it can integrate layer processing steps at runtime. To                operations; the time they run in can be bounded, because the op-
+demonstrate the benefits of protocol composition we built a simple             erating system can reason about their behavior (as well as check
+web server that serves HTTP requests. The server uses an ASH built             for safety). ASHs must be limited in expressiveness to allow the
+out of three layers for the send and receive path. The receive path            operating system to do this reasoning. Upcalls do not suffer this
+consists of three layers for: processing the AAL5 trailer, computing           limitation. Therefore, in cases where a richer set of computations
+the IP and TCP checksums, and performing an application-specific               is required, the operating system could perform an upcall to the
+operation that checks whether the data requested is in the server              application at message processing time, instead of calling an ASH
+cache. (The send path is also an integrated ASH composed out of                (or the ASH could initiate this upcall itself). If the upcall does not
+three layers.)                                                                 complete promptly, the operating system simply interrupts it, saves
+    We have also built a UDP version of this simple server by                  its state, and continues. While this model is more expressive than
+just composing the UDP layer instead of the TCP layer with the                 ASHs, it has a high computational cost: a full or partial context-
+AAL5 layer and application layer. Unlike the TCP version, the                  switch is required, as well as a number of kernel/user protection
+
+
+                                                                          10
+crossings. We believe that both of the models can be useful in sys-           still guarantees small latencies while also provides strong protection
+tems. Those that can tolerate more latency can use the flexibility of         guarantees.
+the upcall; those that cannot will be confined to ASHs.                            Issues about schedulability and when and how a message han-
+                                                                              dler should abort have been recently explored in Optimistic Active
+Code importation There are a number of clear antecedents to                   Messages [46]. The tradeoffs discussed there are applicable here.
+our work: Deutsch’s seminal paper [12] and Wahbe et al.’s mod-
+ern revisitation of safe code importation [44] influenced our ideas           ILP and protocol composition There have been many in-
+strongly, as did Mogul’s original packet filter paper [31]. In some           stances of ad hoc ILP, for example, in many networking ker-
+sense this work can be viewed as a natural extension of the same              nels [9]. There is also quite a bit of work on protocol composi-
+philosophical foundation that inspired the packet filter: we have pro-        tion [5, 23, 24, 41, 42].
+vided a framework that allows applications outside of the operating               The first system to provide an automatic modular mechanism for
+system to install new functionality without kernel modifications.             ILP is Abbott and Peterson [1]. They describe an ILP system that
+    The SPIN project [4] is concurrently investigating the use of             composes macros into integrated loops at compile time, eliminating
+downloading code into the kernel. SPIN’s Plexus network system                multiple data traversals. Each macro is written with initialization
+runs user code fragments in the interrupt handler [21] or as a ker-           and finalization code and a main body that takes in word-sized input
+nel thread. Plexus guarantees safety by requiring that these code             and emits word-sized output. They provide a thorough exploration
+fragments are written in a type-safe language, Modula-3. Plexus               of the issues in ILP: most of their analysis can be applied directly to
+simplifies protocol composition, but unlike ASHs, does not pro-               our system. There are two main differences between our system and
+vide direct support for dynamic ILP. Preliminary Plexus numbers               what they describe: their system is intended for static composition,
+for in-kernel UDP on Ethernet and ATM look promising but are                  whereas our system allows dynamic composition, and they make
+slower than our user-level implementation of UDP. No numbers are              no provisions for application extensions to the system, whereas our
+reported yet for TCP.                                                         system allows untrusted code to participate in ILP in a safe and
+    With the advent of HotJava and Java [22], code importation                efficient manner. In one sense this last difference is a practical
+in the form of mobile code has received a lot of press. Recently              limitation: static composition makes dynamic extensions to the
+Tennenhouse and Wetherall have proposed to use mobile code to                 ILP engine infeasible. Given the richness of possible data manip-
+build Active Networks [37]; in an active network, protocols are               ulations, however, disallowing application-specific operations can
+replaced by programs, which are safely executed in the operating              carry a significant cost. For example, even a single re-traversal of
+system on message arrival. Small and Seltzer compare a number of              the data can halve available bandwidth. Proebsting and Watterson
+approaches to safely executing untrusted code [35].                           describe a new algorithm for static ILP using filter fusion [33].
+                                                                                  Static composition requires that all desired compositions be
+Message vectoring Message vectoring has been a popular focus                  known and performed at compilation time. There are two main
+of the networking community [14, 15, 16, 36]. The main differ-                drawbacks to such an approach. The first is the exponential code
+ence between our work and previous work is that ASHs can per-                 growth inherent in it. For example, to perform data conversion be-
+form application-specific computation at message arrival. By using            tween two hosts a static system must have pre-composed all possible
+application-state and domain knowledge these handlers can perform             conversion methods (i.e., between big- and little-endian, external
+operations difficult in the context of static protocol specifications.        and internal ASCII, Cray floating point and SPARC, etc.). Addi-
+     The most similar work to the ASH system is Edwards et al. [16],          tionally adding all possible checksum, encryption, and compression
+who import simple scripts using the Unix ioctl system call to copy            operations will only increase code size. Dynamic composition al-
+messages to their destination. The main differences are the expres-           lows these operations to be combined as need be, scaling memory
+siveness of the two implementations. Their system supplies only               consumption linearly in proportion to actual use. The second, more
+rudimentary operations (e.g., copy and allocate), limiting the flex-          subtle problem of static composition is that the system is a closed
+ibility with which applications can manipulate data transfer. For             one: the operating system can neither extend the ILP processing
+example, applications cannot synthesize checksumming or encryp-               it performs nor have it extended by applications. In contrast, the
+tion functionality. Furthermore, their interface precludes the ability        ASH system allows new manipulation functions to be dynamically
+to transfer control or to reply to messages. Nevertheless, their sim-         incorporated into the system.
+ple interface is easy to implement and tune; it remains to be seen if
+the expressiveness we provide is superior to it for real applications         7 Conclusion
+on real systems.
+     In the parallel community the concept of active messages [43]            We have described an extensible, efficient networking subsystem
+has gained great popularity, since it dramatically decreases latency          that provides two important facilities: the ability to safely incorpo-
+by executing the required code directly in the message handler.               rate untrusted application-specific handlers into the networking sys-
+Active messages on parallel machines do not worry about issues of             tem, and the dynamic, modular composition of data manipulation
+software protection.                                                          steps into an integrated, efficient data transfer engine. Taken in tan-
+     Several user-level AM implementations for networks of work-              dem, these two abilities enable a general-purpose, modular and effi-
+stations have recently become available [30, 36]. U-Net designed              cient method of simultaneously providing both high-throughput and
+for ATM networks, does provide protection, but only at a cost of              low-latency communication. Furthermore, since application code
+higher latency: messages are not executed until the correspond-               directs all operations, designers can exploit application-specific
+ing process happens to be scheduled by the kernel [36]. HPAM                  knowledge and semantics to improve efficiency beyond that at-
+is designed for HP workstations connected via an FDDI layer. It               tainable by fixed, hard-coded implementations.
+makes the optimistic assumption that incoming messages are in-
+tended for the currently running process; messages intended for               Acknowledgments
+other processes are copied multiple times. The described imple-
+mentation of HPAM does not provide real protection: they make                 We thank the DEC Systems Research Center for lending us four
+the assumption that no malicious user will modify the HPAM code               AN2 Network Interface cards and a AN2 switch, and for giving
+or data structures. Our methodology can be viewed as an extension             us device drivers for these cards. We would also like to thank
+of active messages to a general purpose environment in a way that             Mike Burrows, for providing useful and speedy assistance while
+
+
+                                                                         11
+we were porting the device drivers to Aegis, and Hal Murray, for            [14] P. Druschel and L.L. Peterson. Fbufs: A high-bandwidth
+helping us get the switch running. Thanks are also due to Thomas                 cross-domain transfer facility. In Proceedings of the 14th
+Pinckney and Héctor M. Briceño for implementing large parts of the             Symposium on Operating Systems Principles, pages 175–189,
+support software for interacting with Aegis, and to Eddie Kohler,                Ashville, NC, USA, December 1993.
+for providing extensive and insightful comments on a draft of this
+paper.                                                                      [15] P. Druschel, L.L. Peterson, and B.S. Davie. Experiences with
+                                                                                 a high-speed network adaptor: A software perspective. In
+                                                                                 ACM Communication Architectures, Protocols, and Applica-
+References                                                                       tions (SIGCOMM ’94), pages 2–13, London, UK, August
+                                                                                 1994.
+ [1] M.B. Abbott and L.L. Peterson. Increasing network through-
+     put by integrating protocol layers. IEEE/ACM Transactions              [16] A. Edwards, G. Watson, J. Lumley, D. Banks, C. Clamvokis,
+     on Networking, 1(5):600–610, October 1993.                                  and C. Dalton. User-space protocols deliver high performance
+                                                                                 to applications on a low-cost Gb/s LAN. In ACM Communi-
+ [2] T.E. Anderson, M.D. Dahlin, J.M. Neefe, D.S. Roselli                        cation Architectures,Protocols, and Applications (SIGCOMM
+     D.A. Patterson, and R.Y. Wang. Serverless network file sys-                 ’94), pages 14–24, London, UK, August 1994.
+     tems. In Proceedings of the 15th Symposium on Operating
+     Systems Principles, pages 109–126, Copper Mountain Resort,             [17] D.R. Engler. VCODE: a retargetable, extensible, very fast
+     CO, USA, December 1995.                                                     dynamic code generation system. In Proceedings of the SIG-
+                                                                                 PLAN ’96 Conference on Programming Language Design and
+ [3] M.L. Bailey, B. Gopal, M.A. Pagels, L.L. Peterson, and                      Implementation, Philadelphia, PA, USA, May 1996.
+     P. Sarkar. PATHFINDER: A pattern-based packet classifier.
+     In Proceedings of the First Symposium on Operating Systems             [18] D.R. Engler and M.F. Kaashoek. DPF: fast, flexible message
+     Design and Implementation, pages 115–123, Monterey, CA,                     demultiplexing using dynamic code generation. In ACM Com-
+     USA, November 1994.                                                         munication Architectures, Protocols, and Applications (SIG-
+                                                                                 COMM ’96), Stanford, CA, USA, August 1996.
+ [4] B.N. Bershad, S. Savage, P. Pardyak, E.G. Sirer, M. Fiuczyn-
+     ski, D. Becker, S. Eggers, and C. Chambers. Extensibility,             [19] D.R. Engler, M.F. Kaashoek, and J. O’Toole Jr. Exokernel:
+     safety and performance in the SPIN operating system. In                     an operating system architecture for application-specific re-
+     Proceedings of the Fifteenth ACM Symposium on Operating                     source management. In Proceedings of the Fifteenth ACM
+     Systems Principles, Copper Mountain Resort, CO, USA, De-                    Symposium on Operating Systems Principles, pages 251–266,
+     cember 1995.                                                                Copper Mountain Resort, CO, USA, December 1995.
+ [5] N.T. Bhatti and R.D. Schlichting. A system for constructing            [20] D.R. Engler, D.A. Wallach, and M.F. Kaashoek. Design and
+     configurable high-level protocols. In ACM SIGCOMM ’95,                      implementation of a modular, flexible, and fast system for
+     pages 138–150, Cambridge, MA, August 1995.                                  dynamic protocol composition. Technical Memorandum TM-
+                                                                                 552, Massachusetts Institute of Technology Laboratory for
+ [6] R. Braden, D. Borman, and C. Partridge. Computing the                       Computer Science, May 1996.
+     Internet checksum. RFC 1071.
+                                                                            [21] M.E. Fiuczynski and B.N. Bershad. An extensible protocol
+ [7] T. Braun and C. Diot. Protocol implemetation using integrated               architecture for application-specific networking. In Proceed-
+     layer processing. In ACM SIGCOMM ’95, pages 151–161,                        ings of USENIX, pages 55–64, San Diego, CA, USA, January
+     Cambridge, MA, August 1995.                                                 1996.
+ [8] D.D. Clark. The structuring of systems using upcalls. In Pro-          [22] J. Gosling. Java intermediate bytecodes. In ACM SIGPLAN
+     ceedings of the 10th Symposium on Operating Systems Prin-                   Workshop on Intermediate Representations (IR’95), pages
+     ciples, pages 171–180, Orcas Island, WA, USA, December                      111–118, San Francisco, CA, USA, March 1995.
+     1985.
+                                                                            [23] R. Harper and P. Lee. Advanced languages for systems soft-
+ [9] D.D. Clark, V. Jacobson, J. Romkey, and H. Salwen. An                       ware: The Fox project in 1994. Technical Report CMU-SC-
+     analysis of TCP processing overhead. IEEE Communications                    94-104, Carnegie Mellon University, Pittsburgh, PA 15213,
+     Magazine, 27(6):23–29, June 1989.                                           January 1994.
+[10] D.D. Clark and D.L. Tennenhouse. Architectural considera-              [24] N.C. Hutchinson and L.L. Peterson. The x-kernel: an archi-
+     tions for a new generation of protocols. In ACM Communica-                  tecture for implementing network protocols. IEEE Trans. on
+     tion Architectures, Protocols, and Applications (SIGCOMM                    Soft. Eng., 17(1), January 1991.
+     ’90), Philadelphia, PA, USA, September 1990.
+                                                                            [25] K.L. Johnson, M.F. Kaashoek, and D.A. Wallach. CRL: High-
+[11] D.E. Culler, A. Dusseau, S.C. Goldstein, A. Krishnamurthy,                  performance all-software distributed shared memory. In Pro-
+     S. Lumetta, T. von Eicken, and K. Yelick. Parallel program-                 ceedings of the 15th Symposium on Operating Systems Prin-
+     ming in Split-C. In Supercomputing,pages 262–273, Portland,                 ciples, pages 213–228, Copper Mountain Resort, CO, USA,
+     OR, USA, November 1993.                                                     December 1995.
+[12] P. Deutsch and C.A. Grant. A flexible measurement tool for             [26] P. Keleher, S. Dwarkadas, A.L. Cox, and W. Zwaenepoel.
+     software systems. Information Processing 71, 1971.                          Treadmarks: Distributed Shared Memory on Standard Work-
+[13] P. Druschel, M.B. Abbott, M.A. Pagels, and L.L. Peterson.                   stations and Operating Systems. In Proc. of the Winter 1994
+     Network subsystem design. IEEE Network, 7(4):8–17, July                     USENIX Conference, pages 115–132, San Francisco, CA,
+     1993.                                                                       USA, January 1994.
+
+
+
+
+                                                                       12
+[27] S.J. Leffler, M.K. McKusick, M.J. Karels, and J.S. Quarter-            [42] R. van Renesse, K.P. Birman, R. Friedman, M. Hayden, and
+     man. The design and implementation of the 4.3BSD UNIX                       D. Karr. A framework for protocol composition in Horus.
+     operating system. Addison-Wesley, 1989.                                     In Proceedings of Fourteenth ACM SIGACT-SIGOPS Sympo-
+                                                                                 sium on Principles of Distributed Computing, pages 138–150,
+[28] K. Li. IVY: A shared virtual memory system for parallel com-                Ottawa, Ontario, Canada, August 1995.
+     puting. In International Conference on Parallel Computing,
+     pages 94–101, University Park, PA, USA, August 1988.                   [43] T. von Eicken, D.E. Culler, S.C. Goldstein, and K.E. Schauser.
+                                                                                 Active messages: a mechanism for integrated communication
+[29] C. Maeda and B.N. Bershad. Protocol service decomposi-                      and computation. In Proceedings of the 19th International
+     tion for high-performance networking. In Proceedings of the                 Symposium on Computer Architecture, pages 256–267, Gold
+     Fourteenth ACM Symposium on Operating Systems Princi-                       Coast, Qld., Australia, May 1992.
+     ples, pages 244–255, Ashville, NC, USA, 1993.
+                                                                            [44] R. Wahbe, S. Lucco, T. Anderson, and S. Graham. Effi-
+[30] R.P. Martin. HPAM: An Active Message layer for a network                    cient software-based fault isolation. In Proceedings of the
+     of HP workstations. In Proceedings of Hot Interconnects II,                 Fourteenth ACM Symposium on Operating Systems Princi-
+     August 1994.                                                                ples, pages 203–216, Ashville, NC, USA, December 1993.
+[31] J.C. Mogul, R.F. Rashid, and M.J. Accetta. The packet fil-             [45] I. Wakeman, A. Ghosh, J. Crowcroft, V. Jacobson, and
+     ter: An efficient mechanism for user-level network code. In                 S. Floyd. Implementing real time packet forwarding poli-
+     Proceedings of the Eleventh ACM Symposium on Operating                      cies using Streams. In Proceedings USENIX Winter 1995
+     Systems Principles, pages 39–51, Austin, TX, USA, Novem-                    Technical Conference, pages 71–82, New Orleans, LA, USA,
+     ber 1987.                                                                   January 1995.
+[32] D. Mosberger, L.L. Peterson, P.G. Bridges, and S. O’Malley.            [46] D.A. Wallach, W.C. Hsieh, K.L. Johnson, M.F. Kaashoek, and
+     Analysis of techniques to improve protocol processing latency.              W.E. Weihl. Optimistic active messages: A mechanism for
+     Technical Report TR96-93, University of Arizona, 1996.                      scheduling communication with computation. In Proceedings
+[33] T.A. Proebsting and S.A. Watterson. Filter fusion. In Pro-                  of the 5th Symposium on Principles and Practice of Parallel
+                                                                                 Programming, Santa Barbara, CA, USA, July 1995.
+     ceedings of the 23th Annual Symposium on Principles of Pro-
+     gramming Languages, pages 119–130, St. Petersburg Beach,               [47] M. Yuhara, B.N. Bershad, C. Maeda, and J.E.B. Moss. Effi-
+     FL, USA, January 1996.                                                      cient packet demultiplexing for multiple endpoints and large
+[34] D.J. Scales, M. Burrows, and C.A. Thekkath. Experience                      messages. In Proceedings of the Winter 1994 USENIX Con-
+                                                                                 ference, San Francisco, CA, USA, January 1994.
+     with parallel computing on the AN2 network. In International
+     Parallel Processing Symposium, April 1996.
+[35] C. Small and M. Seltzer. A comparison of OS extension
+     technologies. In Proceedings of USENIX, pages 41–54, San
+     Diego, CA, USA, January 1996.
+[36] V. Buch T. von Eicken, A. Basu and W. Vogels. U-Net: A user-
+     level network interface for parallel and distributed computing.
+     In Proceedings of the Fifteenth ACM Symposium on Operating
+     Systems Principles, pages 40–53, Copper Mountain Resort,
+     CO, USA, December 1995.
+[37] D.L. Tennenhouse and D.J. Wetherall. Towards an active
+     network architecture. In Proc. Multimedia, Computing, and
+     Networking 96, January 1996.
+[38] C.A. Thekkath and H.M. Levy. Limits to low-latency com-
+     munication on high-speed networks. ACM Transactions on
+     Computer Systems, 11(2):179–203, May 1993.
+[39] C.A. Thekkath, H.M. Levy, and E.D. Lazowska. Separating
+     data and control transfer in distributed operating systems. In
+     Sixth International Conference on Architecture Support for
+     Programming Languages and Operating Systems, pages 2–
+     11, San Jose, CA, USA, October 1994.
+[40] C.A. Thekkath, T.D. Nguyen, E. Moy, and E. Lazowska. Im-
+     plementing network protocols at user level. In ACM Communi-
+     cation Architectures,Protocols, and Applications (SIGCOMM
+     ’93), pages 64–73, San Francisco, CA, USA, October 1993.
+[41] C. Tschudin. Flexible protocol stacks. In ACM Communica-
+     tion Architectures, Protocols, and Applications (SIGCOMM
+     ’91), pages 197–204, Zurich, Switzerland, September 1991.
+
+
+
+
+                                                                       13
+

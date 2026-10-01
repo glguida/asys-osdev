@@ -1,0 +1,54 @@
+         The Exokernel Approach to Operating System
+                        Extensibility
+                Dawson R. Engler, M. Frans Kaashoek, and James W. O'Toole Jr.
+                           MIT Laboratory for Computer Science
+    To provide modularity and performance, operat-          calls implement synchronous cross-domain transfer of
+ing systems kernels should have only minimal em-            control. Operationally, an upcall transfers the pro-
+bedded functionality. The exokernel is a new oper-          gram counter in one domain to an agreed upon value
+ating system structure that achieves this minimal-          in another and installs the called domain's exception
+ist goal by letting applications manage the underly-        context. This mechanism is extremely light-weight
+ing hardware resources directly instead of hiding the       (our relatively \green" implementation costs 20 in-
+hardware functionality in layers of operating system        structions on a MIPS R3000) and lets applications
+software. Applications can safely extend exokernel          build their own IPC semantics. For example, a client
+interfaces. By having direct access to the physical         that trusts a server can let the server save and restore
+hardware applications can implement policies that           registers that it uses.
+incorporate application-specific knowledge.                      The exokernel can be programmed by down-loading
+    Today's operating systems are large, inecient,         application code into the kernel proper. This code is
+and most importantly, in flexible. In our view, the           made safe by bounding wild jumps and memory oper-
+bulk of operating system woes can be solved by sim-         ations through sandboxing. Furthermore, execution
+ply pushing the OS interface lower. To achieve this         time can be bounded through either code augmen-
+goal, we have defined a new operating system struc-          tation or interrupts. The ability to download code
+ture that safely exports only those resources defined        allows applications to perform operations not possi-
+by the underlying hardware. Our goal in the exoker-         ble in user-space. For example, this code can access
+nel is to put abstractions traditionally implemented        unmapped physical memory, which is important for
+by the kernel out into user-space, where it is the job      handling TLB-miss exceptions. Additionally, by al-
+of application-level libraries or servers to abstract the   lowing user code and state to reside behind the super-
+exposed hardware resources.                                 visor barrier the frequency of user/supervisor kernel
+    By moving management of resources out into user-        crossings can be reduced.
+space, an exokernel allows aggressive customization.            The exokernel's low-level interface allows very ex-
+We see three reasons for customization. The first is          ible user-level implementationsof traditionally rigidly
+to tailor policies to given hardware con gurations,         defined OS services. For instance, since the exokernel
+allowing applications to advance with the hardware.         does not enforce a particular page-table structure ap-
+The second is to tailor policies to given applications.     plications can aggressively specialize them: Since the
+For example, closer integration with virtual memory         address space of a \protected object" may be com-
+management can enable distributed shared memory             prised solely of two or three pages it can be mapped
+systems and garbage collectors to run an order of           using only a small, linear page-table, while a sin-
+magnitude faster. The third is to improve perfor-           gle 64-bit address-space subsystem may use inverted
+mance by reducing the overhead of interrupts, excep-        page-tables.
+tions, context switches, and cache misses, which are            To summarize, the advantages of an exokernel
+the primary sources of overhead in today's operating        based OS structure: (1) implementors can build am-
+systems.                                                    bitious systems without ghting inappropriate OS
+    The exokernel's sole function is providing pro-         abstractions, (2) abstractions can be specialized to
+tected access to physical resources. It is responsible      a given domain, (3) implementors can experiment
+for allocating, deallocating, and multiplexing these        without a ecting the rest of the system and (4) appli-
+resources in a secure way. Resource access is con-          cations can achieve good performance since they can
+trolled through the use of 64-bit capabilities. The         utilize specialized libraries. Furthermore, as these li-
+resources exported by the exokernel include physical        braries reside in the same protection domain as the
+memory (divided into pages), the CPU (divided into          application, cross-domain calls are avoided.
+time-slices), the TLB, context-identi ers, and disk             No other operating system allows this degree of
+memory (divided into blocks).                                 flexibility in the definition and implementation of
+    The exokernel performs two non-physical func-           fundamental system objects.1
+tions: exception forwarding and upcalls. The exok-
+ernel hands exceptions directly to applications, en-
+abling very ecient user-level exception handling. Up-        1   See http://www.pdos.lcs.mit.edu for more information.
+

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "os-architect",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Architecture of the OS being built: kernel/userspace division, interfaces, memory and protection design."
+}

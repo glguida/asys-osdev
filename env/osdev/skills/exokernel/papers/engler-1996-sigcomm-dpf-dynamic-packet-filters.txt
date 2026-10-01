@@ -1,0 +1,508 @@
+       DPF: Fast, Flexible Message Demultiplexing using Dynamic Code Generation
+                                                          Dawson R. Engler, and M. Frans Kaashoek
+                                                           M.I.T. Laboratory for Computer Science
+                                                               Cambridge, MA 02139, U.S.A.
+
+                                                         fengler,kaashoekg@lcs.mit.edu
+
+
+
+
+                                     Abstract                                                   reported in the literature [1, 17, 18, 27]. DPF’s performance is
+                                                                                                equivalent to, and in some situations can even exceed, the perfor-
+Fast and flexible message demultiplexing are well-established goals                             mance of hand-coded demultiplexors.
+in the networking community [1, 18, 22]. Currently, however, net-                                    Message demultiplexing is the process of determining which
+work architects have had to sacrifice one for the other. We present                             application a message is for. Like other packet demultiplexors,
+a new packet-filter system, DPF (Dynamic Packet Filters), that pro-                             DPF uses packet filters to demultiplex messages. Packet filters are
+vides both the traditional flexibility of packet filters [18] and the                           predicates written in a small safe language [18]. Logically, a packet
+speed of hand-crafted demultiplexing routines [3]. DPF filters run                              filter examines all incoming network packets; those messages that
+10–50 times faster than the fastest packet filters reported in the                              satisfy its predicate are delivered to its associated application. This
+literature [1, 17, 18, 27]. DPF’s performance is either equivalent                              approach allows new protocols to be implemented outside of the
+to or, when it can exploit runtime information, superior to hand-                               kernel and then downloaded into the packet filter driver, greatly
+coded demultiplexors. DPF achieves high performance by using a                                  increasing flexibility [18].
+carefully-designed declarative packet-filter language that is aggres-                                Packet filters are interpreted, which entails a high computational
+sively optimized using dynamic code generation. The contributions                               cost. This cost is sufficiently high that, to the best of our knowledge,
+of this work are: (1) a detailed description of the DPF design, (2)                             all high-performance networking systems except for the x-kernel
+discussion of the use of dynamic code generation and quantitative                               project [1, 12] avoid them completely. For example, the Pere-
+results on its performance impact, (3) quantitative results on how                              grine RPC system [13], the remote read/write model of Thekkath
+DPF is used in the Aegis kernel to export network devices safely and                            et al. [23], and the Active message model [26] all use hard-wired
+securely to user space so that UDP and TCP can be implemented                                   in-kernel demultiplexing routines. We show that applying dynamic
+efficiently as user-level libraries, and (4) the unrestricted release of                        code generation to packet filters can improve their performance to
+DPF into the public domain.                                                                     the point that they are equivalent in efficiency to (and in some cases
+                                                                                                faster than) hand-crafted in-kernel routines, while retaining all of
+1 Introduction                                                                                  the flexibility of the packet filter model.
+                                                                                                     The key in our approach to making filters run fast is dynamic
+Rapid demultiplexing is important in order to neither waste pro-                                code generation. Dynamic code generation is the creation of ex-
+cessing cycles nor add latency to end-to-end message time [1].                                  ecutable code at run time. Its most important property is that it
+Application-specific demultiplexing is important so that applica-                               allows the use of runtime information to improve code generation.
+tions can explore new protocols without kernel modification [18].                               Dynamic code generation (or dynamic compilation) is directly anal-
+Previously, networking architects have had to trade flexibility for                             ogous to static compilation except that, since it occurs at runtime, it
+performance to demultiplex messages efficiently. For example, the                               must be made much more efficient. Dynamic code generation can
+packet-filter model [18] is flexible, but its cost has precluded its                            be used to compile a packet filter specification down to actual ma-
+use in high-performance networking systems. Instead, networking                                 chine code. While dynamic code generation has been considered a
+systems use hand-crafted demultiplexing routines that can only be                               possible mechanism for improving the performance of packet filters
+extended or altered by kernel architects [13, 23, 26]. The packet                               since their inception [18], it has been deemed too “complicated” to
+filter system described in this paper, Dynamic Packet Filters (DPF),                            implement [18]. A contribution of our work is to show that dynamic
+achieves these twin goals of flexibility and performance by us-                                 code generation can be used in a straightforward manner.
+ing a carefully-designed declarative packet-filter language that is                                  We have designed, implemented, and tested DPF. User-level
+amenable to aggressive dynamic code generation. DPF filters run                                 measurements show that DPF demultiplexes messages 25–50 faster
+13–26 times faster than PATHFINDER filters, the fastest numbers                                 than MPF [27] and 13–26 faster than PATHFINDER [1], the fastest
+    This work was supported in part by the Advanced Research Projects Agency under
+                                                                                                packet filter demultiplexor in the literature. In addition, DPF scales
+contract N00014-94-1-0985 and by a NSF National Young Investigator Award.                       better with the length of a filter than PATHFINDER, making it better
+Copyright c 1996 by the Association for Computing Machinery, Inc. Permission to                 suited for deep protocol stacks. We have also integrated DPF with
+make digital or hard copies of part or all of this work for personal or classroom use is        Aegis, an exokernel operating system [10]. DPF allows Aegis to
+granted without fee provided that copies are not made or distributed for profit or direct       export the Ethernet interface safely and efficiently to applications;
+commercial advantage and that copies bear this notice and the full citation on the first
+page. Copyrights for components of this work owned by others than ACM must be
+                                                                                                this structure allows all protocols to be implemented completely as
+honored. Abstracting with credit is permitted. To copy otherwise, to republish, to post         libraries in user space. Measurements from Aegis’s user-level UDP
+on servers, or to redistribute to lists, requires prior specific permission and/or a fee.       and TCP implementations, which use DPF for filtering packets,
+Request permissions from Publications Dept., ACM Inc., fax +1 (212) 869-0481, or                show that this structure can achieve performance as good as or
+(permissions@acm.org).
+                                                                                                better than hard-coded in-kernel implementations while retaining a
+
+
+                                                                                            1
+                                                                                   is to collapse similar prefixes, eliminating unnecessary com-
+      (                                                                            putation. This optimization is profitable due to the fact that
+          # Check Ethernet header                                                  many network communications use the same set of protocols
+          (12:16==   0x8) &&           # IP datagram?                              (e.g., TCP/IP, UDP) and, as a result, their associated filters
+          # Skip over ether header (14 bytes)
+          (SHIFT(6+ +  6    2)) &&
+                                                                                   will check the same set of conditions. Merging the filters
+                                                                                   eliminates duplicate checks. Both equivalent and disjunctive
+          # Check IP header                                                        atoms are merged. Two atoms are disjunctive if they share an
+          (9:8==   6) &&                 # Check protocol : TCP is 6               identical expression tree on one side of the equality operator,
+               ==
+          (12:32      0xc00c4501) && # Check IP src addr (192.12.69.1)             but compare to different constants. When found, these atoms
+          # Skip past IP header (assume fixed sized; 20 bytes)                     are merged and a hash table is used to determine which (if
+          (SHIFT(20)) &&                                                           any) of the merged atoms were satisfied.
+          # TCP header                                                          4. Atoms that were not merged into the main filter trie are con-
+          (0:16==  1234) &&     # Check source port (2 bytes)                      nected to it with an “or” branch: during message demul-
+          (2:16==  4321)        # Check destination port (2 bytes)                 tiplexing these branches are checked one at a time until a
+      )                                                                            filter accepts or no more branches remain. Currently these
+                                                                                   branches are sorted by reference count and checked from
+          Figure 1: DPF filter to recognize TCP/IP packets.                        largest reference count to smallest. After a new or branch
+                                                                                   is created, the atoms that it contains are traversed, and an
+                                                                                   unlinked code fragment is generated from them (we discuss
+high degree of flexibility.                                                        this operation below).
+    The remainder of the paper is structured as follows. Section 2
+discusses the design of DPF and its filter language. Section 3                  5. After merging the new filter into the master filter, if code was
+describes DPF’s implementation using dynamic code generation.                      generated, the system re-traverses the master filter, copying
+Section 4 reports on DPF’s performance and compares its perfor-                    the code associated with each changed atom into a linear block
+mance to other packet filters. Section 5 describes how we use DPF                  of memory. Cleanup is performed (e.g., jumps are back-
+to run UDP and TCP as user-level libraries. Section 6 relates DPF                  patched and the instruction cache is flushed) and execution
+to other work. In Section 7 we conclude.                                           continues.
+
+2 Dynamic Packet Filter                                                      2.1 DPF/Operating system interface
+DPF’s packet filter language is a declarative language that is used by            The DPF system is modular and easily integrated into network
+protocols to describe the message headers that they are looking for.         subsystems. Its public interface (given in Table 1) is comprised
+Similarly to the languages used in MPF [27] and PATHFINDER [1],              of three functions: dpf insert (used to insert a filter), dpf demux
+it can handle a wide range of possible protocols and supports frag-          (used to demultiplex messages), and dpf delete (used to delete
+mentation.                                                                   filters). System specific details of message alignment, minimum
+     A DPF packet filter is composed of a sequence of boolean com-           packet size, cache flushing, and a memory allocation function are
+parisons (or atoms) linked by conjunctions. Logically, a filter’s            provided as defaults that can be overridden.
+atoms are checked in order after packet reception (our declarative
+language avoids most side-effects, allowing re-ordering for effi-            3 Implementation
+ciency). If all atoms are true, then the filter accepts and the packet
+is delivered to the associated application.                                  This section first discusses how DPF uses dynamic code generation
+     Figure 1 shows an example packet filter. Each atom is specified         and then reports on a number of optimizations that it performs.
+using the standard set of arithmetic operators, with the addition of
+the ‘:’ and SHIFT operators. The ‘:’ operator is used to read packet         3.1 Dynamic code generation
+data. It takes as arguments a base (specified in bytes) and a size
+(specified in bits). The base can be either a constant or an indirect        DPF exploits dynamic code generation in two ways: by using it to
+load from the message itself. The SHIFT operation shifts the base of         eliminate interpretation overhead by compiling packet filters into
+the message pointer, allowing arbitrary predicates to be composed            executable code, and by using filter constants to aggressively opti-
+using relative addressing.                                                   mize this executable code. For portability, DPF uses the machine-
+     A new filter is merged into the set of active filters as follows:       independent VCODE dynamic code generation system [8].
+                                                                                  Because an atom represents a single comparison, the code gen-
+   1. Filters are written by clients, and then preprocessed into a           erated for it is mapped to a basic block of machine instructions:
+      low-level representation. This form is then shipped to the             i.e., control enters from the top of an atom and leaves at the bot-
+      packet filter engine.                                                  tom (via a branch). Code generation is done with one pass over
+                                                                             the atom’s expression tree. This pass performs register allocation,
+   2. The packet-filter engine parses the filter into its constituent        simple delay slot scheduling, and instruction selection and emis-
+      atoms, which are checked for syntactic and semantic errors             sion. Register allocation and delay slot scheduling are modeled on
+      and turned into an expression tree. As a performance trick,            Proebsting [19]. Instruction selection is a matter of translating the
+      checking is elided for atoms that are duplicates of already            operators of the atom’s expression tree to the instructions supplied
+      vetted atoms. For example, when TCP filters are downloaded,            by the underlying hardware. There is a direct mapping between
+      only the first filter’s atoms are subject to rigorous checking —       these operations and machine instructions (e.g., “&” maps to and);
+      the others can be verified with a byte comparison that ensures         as a result, instruction selection is simple. Finally, code is emitted
+      they are identical.                                                    using a set of simple macros. As noted above, each atom is a basic
+   3. As in PATHFINDER, the set of active filters is stored in a trie        block, and ends with a jump and (possibly) a delay slot: these are
+      data structure. New filters are merged into the trie along the         left unfilled until the code is instantiated.
+      path with the largest prefix match. The point of this operation
+
+
+                                                                         2
+        Operation                                                             Description
+        int dpf insert(struct dpf ir *filter)                                 dpf insert inserts filter filter. It fails if the filter is malformed, if
+                                                                              memory allocation required to incorporate it fails, or, optionally, if
+                                                                              the filter is already present. On success it returns a filter id.
+        int dpf delete(int fid)                                               Delete filter fid inserted using dpf insert. It fails if the filter does
+                                                                              not exist.
+        int (*dpf demux)(void *msg, unsigned nbytes)                          The function pointer dpf demux is called to demultiplex a packet.
+                                                                              It takes as arguments a pointer to the message (msg) and a message
+                                                                              size, in bytes (nbytes). It returns the id of the accepting filter, or “0”
+                                                                              if no filter accepts.
+
+
+                                                              Table 1: DPF Interface
+
+
+    Since dynamic code generation occurs at runtime, its main cost              since DPF can exploit filter-specific constants, it can be faster than
+is the time required to emit code. We have taken care to ensure                 hand-crafted demultiplexors. For example, in Figure 2 the check
+that the compilation process described in the previous paragraph                for the source IP address (192.12.69.1) can be encoded directly in
+happens only once — when an atom is first installed. By caching this            the instruction stream.
+code, subsequent recompilations of an atom (such as needed when
+new branches are added to the main filter trie) can be performed by             Fast disjunctions Disjunctions compare a given expression against
+copying the cached code.                                                        a range of possible values. In systems such as MPF and PATHFINDER,
+    To minimize the need to regenerate the demultiplexor function,              these values are not known a priori, and so a general-purpose, pos-
+DPF tracks the common case where a filter was merged with the                   sibly expensive hash function must be used, along with checks for
+main filter trie without adding new nodes or requiring modification             collisions, etc. However, since DPF knows both the number and the
+to existing ones. Operationally, this situation translates to a filter          actual values that must be compared, it can exploit this information
+only requiring entries to be added to the hash tables used to check             to make disjunction resolution more efficient. For example, if the
+disjunctions. As long as new hashing functions do not have to be                number of words to compare against is small (say 1–3), the hash
+created (e.g., to check for collisions, or to use a different hashing           table is completely eliminated and comparisons are performed di-
+strategy), code does not have to be regenerated.                                rectly (as a series of branches), saving the cost of hash table lookup.
+    As we describe above, the current DPF implementation copies                 As another example, since the number and value of keys are known
+atom blocks into contiguous memory to construct the demultiplex-                at runtime, DPF can select among several hash functions to obtain
+ing routine. An alternative approach would be to thread the code                the best distribution and then the chosen function directly in the in-
+blocks using jumps. This method would provide cheaper code gen-                 struction stream. Furthermore, since DPF knows at code-generation
+eration since forming the jumps between blocks is (usually) more                time whether keys have collided, it can eliminate collision checks
+efficient than copying the several words of memory containing atom              if no collisions have occurred.
+instructions. However, it makes demultiplexing routines less effi-                  The mechanics of this optimization are similar to the manner
+cient since control would not “fall through” from one atom to the               in which optimizing compilers treat C switch statements, which
+next but, rather, would have to be forcibly redirected using a jump.            require that a given expression be matched against a constant. A
+We intend to investigate this alternative as we scale DPF to support            small range of values is searched directly, sparse values are matched
+environments with tens of thousands of filters,                                 using binary search, and dense ranges are matched using an indirect
+                                                                                jump.
+3.2 Optimizations                                                                   Subsequent optimizations only require a preprocessing step, not
+                                                                                complete dynamic code generation. However, they aid dynamic
+Packet filter optimizations can be either intra-filter [17] (within a           code generation’s effectiveness.
+filter) or inter-filter [27, 1] (between filters). Dynamic code gener-
+ation is an intra-filter optimization. In this paper, we are interested
+in isolating the effects of dynamic code generation. To this end,               Atom coalescing The first optimization in this category is the co-
+we re-implemented the applicable inter-filter optimizations used by             alescing of adjacent atoms. For example, assuming word alignment,
+PATHFINDER (the fastest packet filter engine in the literature) in              the checks of source and destination ports in Figure 1 examine two
+the context of DPF; by holding this optimization framework con-                 two-byte quantities that are contained in the same word, allowing
+stant, we can obtain a clear picture of the effects of dynamic code.            us to collapse this comparison into a single operation:
+To the best of our knowledge, the optimizations presented in this
+subsection are not implemented by PATHFINDER or any other                              # TCP header before coalescing
+current packet filter engine.                                                          (0:16   ==
+                                                                                                1234) && # Check source port
+                                                                                       (2:16   ==
+                                                                                                4321)        # Check destination port
+Runtime constants The simplest optimization is encoding filter                         # TCP header after coalescing
+constants directly into the instruction stream. For example, the filter
+                                                                                       (0:32   ==
+                                                                                                283182290) # 283182290                 ==
+presented in Figure 1 lists the source and destination ports as well
+as the source address. Because these values are constant over the                                             # ((4321 16) j 1234)<<
+filter’s lifetime, they can be incorporated as immediate operands in
+the instruction stream itself, eliminating indirections.                        Because this optimization eliminates a control flow change, it can
+     Since many of these constants are filter-specific as opposed to            save more than the few instructions required for the load, com-
+protocol-specific (e.g., they are known only after a connection is              parison and branch. For example, in architectures with branch
+established), a statically coded demultiplexor cannot access them               prediction hardware, eliminating branches implies one fewer pos-
+directly. Instead, it must track such information in memory vectors             sible misprediction. Note that atom coalescing is most useful when
+(or hash tables) and access it via costly indirection. In other words,          the current alignment is known or can be predicted (see below).
+
+
+
+                                                                          3
+Alignment estimation Because neither packet filters nor mes-                         # Check Ethernet header
+sages can be trusted, traditional packet-filter systems perform a                    # (12:16  ==   0x8) &&
+number of checks to guard against errors. For example, packet-filter                 lhu     t1, 12(a0)    # 12:16 (a0 holds pointer to message)
+engines treat every load and store as potentially unaligned. Mem-                    li      t0, 0x8       # Load 0x8
+                                                                                     bne     t1,t0,$next   # Branch to next filter if not equal
+ory operations must therefore first be checked for proper alignment
+to eliminate unaligned access traps. We optimize this process by                     # SHIFT(6   + 6 + 2) && (is optimized away)
+finding a lower bound for the alignment of the message-pointer
+base register. The general algorithm is to record the effects of every               # Check protocol: TCP is 6
+SHIFT instruction on the base message register. For example, this                    # (9:8 ==   6) &&
+register starts word-aligned: if all subsequent shifts are by constants              lbu         +
+                                                                                            t1,9 14(a0)     # 9:8 after propogating ethernet header size
+that are multiples of four, then this bound stays the same. However,                 li     t0,6            # load 6
+if a shift by two bytes occurs, then the lower bound on this register                bne    t1,t0,$next     # Branch to next filter if not equal
+becomes two.
+     As a side-effect of alignment information propagation DPF                 Figure 2: Generated MIPS R3000 code to recognize the first three
+eliminates constant SHIFT operations by adding its operand to the              atoms of an Ethernet/IP/TCP header (after optimization).
+message offset of subsequent atoms. This optimization saves about
+one addition instruction for each protocol header.
+     There are two complications to alignment estimation, both aris-           as Thekkath et al. [23]) is small, since the handler must only save
+ing from indirect loads. If shifts are performed using indirect loads          and restore a handful of registers to classify a packet. In contrast,
+then the value loaded cannot be determined statically and must be              an interpretive packet-filter engine is a more heavy-weight entity
+pessimistically assumed to be only byte-aligned. Fortunately, com-             that has large register requirements; these requirements cause a
+putations are usually performed on this value before it is used to shift       commensurate increase in register saves and restores, increasing its
+the message pointer. For example, consider a possible expression               latency.
+to shift past a variable-sized IP header:
+                                                                               3.4 Concerns
+         # skip over variable IP header
+         (SHIFT((4:8 & 0xf)     << 2))                                         The main concern arising from the use of dynamic code genera-
+                                                                               tion is portability. Fortunately, compiler technology has reached
+Shifting the result to the left by 2 (multiplying by 4) ensures that the       the threshold where portable dynamic code generation systems are
+message register is word-aligned. The alignment heuristic works                beginning to be made freely available. For instance, DPF uses the
+by traversing the expression tree of shift instructions looking for            public-domain VCODE dynamic code generation system [8]. Lan-
+such operations (e.g., multiplication, left-shift, and masks).                 guage support for dynamic code generation has even been added to
+                                                                               high-level languages such as C [4, 9] making the generation code
+                                                                               code at runtime no more complex than the implementation of stat-
+Bounds-check aggregation To ensure protection, packet filters                  ically generated code. However, even if an implementor eschews
+are constrained from accessing memory outside the current mes-                 the use of a portable system, writing the machine-specific pieces of
+sage. In traditional packet-filters, this protection is enforced by            DPF is not difficult, since the amount of machine-specific code that
+checking each message reference for legality. For better perfor-               must be written is small: packet filters use a simple, restricted set of
+mance, DPF eliminates bounds checks by using aggregation. This                 operations (e.g., all operations are unsigned, freeing implementors
+optimization works by scanning forward from each shift instruction             from supporting floating-point and signed integer operation). Our
+to find the load with the largest offset. Before the shift is performed,       initial implementation of DPF took such an approach. Not includ-
+we check that this offset is valid. If it is, then execution contin-           ing the instruction macros themselves (which are freely available in
+ues, and no more bound checks are performed until the next SHIFT               systems such as the New Jersey Toolkit [20]), it was a few hundred
+instruction. If the check fails, then the filters along this path are          lines of machine-dependent source. Compared to the overall effort
+considered to have rejected and are skipped. An extension to this              required in other parts of the kernel, this is a rather small amount
+optimization is to simply scan forward until either a shift using an           of code to write and, in our experience, can take as little as one to
+indirect load is found, and only then recalculate the bounds check.            two days to construct. Finally, the use of dynamic code generation
+This optimization aggregates all bounds checks to a single point               can be a simplifying mechanism, since it removes the need for a
+in time and has the pleasant side effect of being a cheap way of               packet-filter expression evaluator.
+eliminating packets.
+                                                                               4 Performance
+3.3 Results of optimizations
+                                                                               In this section we evaluate DPF’s performance. Our experiments
+     Figure 2 demonstrates the net effect of these optimizations by            are based on those of PATHFINDER [1]. The PATHFINDER and
+showing the code DPF generates for the first three atoms of the                MPF numbers were taken from the literature [1] (we were able to
+filter described in Figure 1. As can be seen, DPF generates efficient          independently verify those for MPF). To ensure meaningful com-
+code: all alignment checks have been eliminated, all filter constants          parisons between the systems, we ran our experiments on the same
+have been encoded in the instruction stream, all delay slots have              hardware (a DECstation 5000/200) and in user space. One mil-
+been filled, and the optimal number of registers (2) has been used.            lion trials were run per experiment; the total time was then divided
+Furthermore, we have been able to exploit the fact that the minimum            to give the time for a single run. Time was measured using the
+message size is 64 bytes: since the filter only references the first 40        getrusage system call.
+bytes of the message, all bounds checks have been eliminated.
+     An additional benefit of dynamic code generation is that the
+fixed cost of starting the packet-filter engine itself is small. In the        Disjunction overhead       The time to perform a disjunction varies
+example we look at, only two registers are needed. As a result, the            as the number of dependent filters increases. In Table 2 we vary
+latency of invoking the packet filter from an interrupt handler (in a          the number of filters, keeping them identical in all but a single dis-
+manner similar to some hand-crafted message demultiplexors such                junctive atom (the destination port). As the number of dependent
+
+
+                                                                           4
+           Header type    1 filter   2 filters   >= 3 filters
+                 Fixed    1.14           1.23           1.39
+              Variable    1.27           1.35           1.51                                         80       PATHFINDER
+                                                                                                              DPF
+Table 2: Time to recognize both fixed and variable sized TCP/IP
+headers; times are in microseconds.
+
+
+
+
+                                                                               time (microseconds)
+                                                                                                     60
+
+              Filter           Unexpected        Expected
+              MPF                      71              35
+              PATHFINDER               39              19                                            40
+              DPF                     1.5             1.5
+
+Table 3: Time to recognize 10 fixed-sized TCP/IP headers; times
+are in microseconds.                                                                                 20
+
+
+filters increases, more comparisons must be performed. When this
+number becomes greater than three, we generate a simple hashing
+                                                                                                     0
+function to efficiently match disjunctions. The difference between
+                                                                                                          0   2        4        6            8
+the time to recognize a single filter and the time to recognize a
+given filter using hash tables is almost 20%, showing that the opti-                                                 depth
+mizations DPF performs based on the number of hashed keys are
+worthwhile.                                                                 Figure 3: Time to recognize message versus depth of protocol stack;
+                                                                            times are in microseconds.
+Classi cation overhead Figure 3 presents the time to classify
+packets destined for one of ten TCP/IP filters for each of the three        Comparison to hand coded Clark et al. [3] give an instruction
+systems. The numbers for MPF and PATHFINDER were taken                      count of 57 instructions for an optimized hand-coded IP demulti-
+from [1]. To ensure a meaningful comparision, we have been care-            plexor. Without disjunctions, our implementation requires approx-
+ful to use equivalent filters.                                              imately 18 instructions. The main reason for this is that DPF can
+    Because interpretation is expensive, both MPF and PATHFINDER            aggressively exploit runtime constants. For example, by incorporat-
+maintain a cache of recently recognized filters; on message arrival,        ing constants into the instruction stream, it eliminates table lookups
+this cache is checked first. Given DPF’s filter classification speed,       to check allowed values. Note that DPF generated code is as fast
+our current implementation does not use caching. As can be seen,            as hand-crafted demultiplexors even when it cannot use runtime in-
+DPF is 25–50 times faster than MPF and 13–26 times faster than              formation: given the restricted domain in which filters are written,
+PATHFINDER, depending on whether or not the filter was cached               DPF can perform the same optimizations that current compilers do
+(“expected”). Clearly, dynamic code generation is profitable.               for packet filter expressions.
+
+Scalability This experiment measures the recognition overhead               5 Using DPF
+of each additional level in the protocol stack. Each level is rep-
+resented by two simple atoms, so that a depth of two implies                We have integrated DPF with the Aegis exokernel [10]. Although
+four atoms, a depth of three six atoms, etc. This experiment                our implementation is for an exokernel, DPF is mostly independent
+was performed using a single active filter. As Figure 3 shows,              of the operating system. For example, adding DPF to a standard
+the DPF implementation is approximately 35–40 times faster than             run-of-the-mill UNIX kernel should be relatively straightforward.
+PATHFINDER, again because of the use of dynamic code genera-                     DPF allows Aegis to export the Ethernet interface securely and
+tion.                                                                       efficiently to applications. Without a packet filter, the kernel would
+                                                                            need to query every application or network server on every packet
+Insertion overhead The time to insert a new filter depends sig-             reception to determine who the packet was for. Packet filters can be
+                                                                            viewed as application code that is downloaded into the kernel. Pro-
+nificantly on the number of nodes it contains. In our current system,
+                                                                            tocol knowledge is limited to the application, while the protection
+the “worst case” overhead is when a filter matches all nodes but the
+                                                                            checks required to determine packet ownership are couched in a lan-
+last one, since all nodes in a filter must be checked for equality
+                                                                            guage understood by the kernel. Fault isolation of the downloaded
+against all others. The cost of this operation for the TCP/IP filter
+                                                                            code is ensured by careful language design (to bound run time)
+used in our classification experiment is 220 microseconds. This
+                                                                            and runtime checks (to protect against wild memory references and
+is approximately a factor of three slower than PATHFINDER. The              unsafe operations).
+bulk of this difference is not caused by the overhead of dynamic                 By separating protection (determining who the packet is for)
+code generation, which accounts for less than 40% of insertion cost.        from authorization and management (setting up connections, ses-
+Rather, it is due to the overhead of translating the filter represen-       sions, managing retransmissions, etc.), fast network multiplexing
+tation of client filters into the internal representation used by DPF       is possible while still supporting complete application-level flex-
+(30%) and by the simple algorithms we use to merge filters into the         ibility. This allows protocols to be implemented as user-level li-
+existing filter structure (greater than 30%). Both of these overheads       braries, which can be tailored to application needs. As pointed
+are amenable to reduction through the use of more sophisticated             out by many others, such user-level protocols have many bene-
+algorithms. While we intend to improve these times, we believe              fits [6, 7, 15, 21, 25].
+that the current overhead is an acceptable tradeoff for an order-of-
+                                                                                 The design of the DPF was heavily influenced by the pervasive
+magnitude performance improvement in packet recognition, since
+                                                                            reliance Aegis places on application use of library operating sys-
+it is repaid with just a handful of packet classifications.
+
+
+                                                                        5
+                                                                              for achieving high performance communication while maintaining
+                 Protocol    Latency     Throughput
+                                                                              a high degree of flexibility.
+                 UDP             309           1.03
+                 TCP             412           1.04                           6 Related work
+Table 4: Latency and throughput for UDP and TCP over Ethernet.                There have been four packet filter systems described in the lit-
+Latency in microseconds. Throughput in Mbyte/s.                               erature [1, 17, 18, 27]. All of these systems use interpretation;
+                                                                              additionally, PATHFINDER considers the effect of hardware assis-
+                                                                              tance [1]. To the best of our knowledge, previous systems have not
+tems. In particular, is not uncommon for many differently-authored            used the optimizations we describe in this paper.
+protocol implementations to be active on the same Aegis system.                   In the context of language design, DPF shares many similarities
+The concrete effect of this situation is that there can be many differ-       with PATHFINDER. While DPF was developed independently of
+ently structured packet filter specifications for each protocol family.       PATHFINDER, its declarative style is similar to PATHFINDER’s
+The challenge such diversity places on a packet filter system is that         (e.g., the use of predicates and simple boolean atoms). The main
+if proper care is not taken in language design, it is very difficult          difference is generality. DPF appears to include a richer set of op-
+to merge these differently written packet filters, even though their          erations than PATHFINDER, which restricts operations in order to
+functionality is equivalent. To counter this difficulty we designed           allow an easier encoding in hardware; since we compile to machine
+the DPF language so that functionally equivalent but structurally             code, we are unfettered by this constraint. One cost of a richer lan-
+different packet filters can be put in a canonical form so that these         guage is that there are many structurally different representations of
+filters can be merged with other packet filters in the same protocol          functionally equivalent atoms (e.g., (4 + 0:16) is equivalent to (0:16
+family. The key to this process is the use of a declarative language          + 4)). The presence of such structural artifacts can work against
+instead of an imperative one.                                                 inter-filter optimizations that rely on detecting similarities. In order
+     The one problem with the use of a packet filter is ensuring that         to counter such artifacts, we have developed a set of tree rewriting
+that a filter does not “lie” and accept packets destined for another          rules that are applied to each atom to yield a single canonical form.
+process. Simple security precautions such as only allowing a trusted              This is the first paper to systematically use and investigate the
+server to install filters can be used to address this problem. On a           effects of dynamic code generation on packet filter performance.
+system that assumes no malicious processes, the DPF language is               The idea of using dynamic code generation to improve packet filter
+simple enough that in many cases even the use of a trusted server             performance is an old one: Mogul et al. [18] mentioned dynamic
+can be avoided by statically checking a new filter to ensure that it          code generation as a possibility for improving packet filter perfor-
+cannot accept packets belonging to another; by avoiding the use of            mance, but considered it “too complicated.” Thekkath et al. [24]
+any central authority, extensibility is increased.                            mentioned the use of dynamic code generation for packet filters as
+     Using DPF we have implemented several protocols at user-level,           well, but did not implement it. 1 Recently, Minshall and collegues
+including UDP and TCP. We use these implementations in all our                have experimented with the use of dynamic code generation in BPF
+applications to interact with the rest of our computing environment           but have not reported on any results. 2 The system we developed
+(e.g., with our NFS server to retrieve and store files). The UDP              was first mentioned in Engler and Proebsting as a motivation for
+library uses one filter per connection. The TCP library uses one              dynamic code generation [11]. We hope that the performance im-
+filter for listening for a connection and one filter per established          provements we demonstrate are a vindication of the packet filter
+connection. Both UDP and TCP are straight implementations of                  model for efficient demultiplexing, allowing packet filters to be as
+RFC 768 and RFC 793, respectively. The TCP implementation is                  useful in the context of Gb/sec networks as they are on Mb/sec
+not fully TCP compliant (it lacks support for fluent internetworking          Ethernets.
+such as fast retransmit, fast recovery, and good buffering strategies),           The general use of dynamic code generation to speed up lan-
+but it is complete enough to communicate correctly and efficiently            guage execution has a venerable tradition. Deutsch used it to im-
+with other TCP implementations in other operating systems.                    plement Smalltalk [5]; it was later used in Self [2]. We were also
+     Table 4 lists the latency and throughput of the user-level UDP           influenced by Massalin’s use of dynamic code generation in the
+and TCP libraries that use DPF. The experiments were performed                context of operating system calls [16].
+on a pair of 40-Mhz DECstation 5000/200s and measured using a                     Recent work has concentrated on improving language-level sup-
+cycle counter. Latency was measured by sending a 60-byte message              port for dynamic code generation. Leone et al. [14] describe lan-
+with a 4-byte payload and waiting for a reply. Throughput for UDP             guage support for dynamic code generation in the context of a
+was measured by sending a train of six packets of 1,500 bytes and             restricted functional language. VCODE [8] and ‘C [9] provide a
+waiting for a quick response. Throughput for TCP was measured                 portable, efficient means of generating machine code “on the fly”
+by writing 10 Mbytes in 8-Kbyte chunks over a TCP connection.                 (both systems are available publicly). Consel and Noël [4] describe
+The maximum segment size was 1,500 bytes and the window size                  a technique for specializing programs with respect to run-time in-
+was set to 8 Kbyte. Larger window size increases the throughput.              variants.
+Both the UDP and TCP libraries checksum the pseudo-header, IP
+header, UDP header, and user data.                                            7 Conclusion
+     The performance of the user-level implementations of UDP
+and TCP using DPF are as good as hard-coded in-kernel imple-                  We have presented a packet filter system, DPF, that uses dynamic
+mentations and better than other user-level implementations of the            code generation to improve the performance of its packet-classifier
+internet protocols in user space over Ethernet [25, 15]. In fact,             engine by 13–26 times that of the best numbers presented in the liter-
+our user-level implementations perform close to the possible limits;          ature. Since the code DPF generates can exploit filter constants that
+Thekkath and Levy measure 340 microseconds between 25-MHz                     are not available to static implementations, it can even be faster than
+DECstation 5000/200s for a user-level reliable raw RPC proto-                 hand-crafted demultiplexing routines. Its performance shows that
+col [22], while we are measuring 309 microseconds on a faster                 packet filters can work well even in the context of Gb/sec networks;
+machine (40-MHz) but using IP and UDP with checksumming.
+                                                                                1
+Part of the good performance is due to Aegis’s efficiency [10], but             2
+                                                                                    Personal communication with Chandu Thekkath.
+from these numbers it is clear that DPF does not form a bottleneck                  Personal communication with Greg Minshall.
+
+
+
+
+                                                                          6
+the simplicity of the system demonstrates that this performance can         [12] N.C. Hutchinson and L.L. Peterson. The x-kernel: an archi-
+be achieved with modest effort.                                                  tecture for implementing network protocols. IEEE Trans. on
+                                                                                 Soft. Eng., 17(1), January 1991.
+Acknowledgments                                                             [13] D. B. Johnson and W. Zwaenepoel. The Peregrine high-
+                                                                                 performance RPC system. Technical Report TR91-151, Rice
+We thank Héctor M. Briceño and Dominic Sartorio for their help                 University, March 1991.
+with the development of DPF. We also thank Eddie Kohler and
+Anthony Joseph for carefully proofreading this paper.                       [14] M. Leone and P. Lee. Lightweight run-time code genera-
+                                                                                 tion. In Proceedings of the Workshop on Partial Evaluation
+                                                                                 and Semantics-Based Program Manipulation, pages 97–106,
+References                                                                       Copenhagen, Denmark, June 1994.
+ [1] M. L. Bailey, B. Gopal, M. A. Pagels, L. L. Peterson, and              [15] C. Maeda and B. N. Bershad. Protocol service decomposi-
+     P. Sarkar. PATHFINDER: A pattern-based packet classifier.                   tion for high-performance networking. In Proceedings of the
+     In Proceedings of the First Symposium on Operating Systems                  Fourteenth ACM Symposium on Operating Systems Princi-
+     Design and Implementation, pages 115–123, November 1994.                    ples, pages 244–255, 1993.
+ [2] C. Chambers and D. Ungar. Customization: Optimizing                    [16] H. Massalin. Synthesis: an efficient implementation of fun-
+     compiler technology for SELF, a dynamically-typed object-                   damental operating system services. PhD thesis, Columbia
+     oriented programming language. In Proceedings of PLDI ’89,                  University, 1992.
+     pages 146–160, Portland, OR, June 1989.                                [17] S. McCanne and V. Jacobson. The BSD packet filter: A new
+ [3] D. D. Clark, V. Jacobson, J. Romkey, and H. Salwen. An                      architecture for user-level packet capture. In USENIX Techni-
+     analysis of TCP processing overhead. IEEE Communications                    cal Conference Proceedings, pages 259–269, San Diego, CA,
+     Magazine, 27(6):23–29, June 1989.                                           Winter 1993. USENIX.
+                                                                            [18] J.C. Mogul, R.F. Rashid, and M.J. Accetta. The packet fil-
+ [4] C. Consel and F. Noel. A general approach for run-time spe-                 ter: An efficient mechanism for user-level network code. In
+     cialization and its application to C. In Proceedings of the 23th            Proceedings of the Eleventh ACM Symposium on Operating
+     Annual Symposium on Principles of Programming Languages,                    Systems Principles, pages 39–51, November 1987.
+     St. Petersburg, FL, January 1996.
+                                                                            [19] T. A. Proebsting and C. N. Fischer. Linear-time optimal code
+ [5] P. Deutsch and A.M. Schiffman. Efficient implementation of                  scheduling for delayed-load architectures. In Proceedings
+     the Smalltalk-80 system. In Proceedings of 11th POPL, pages                 of the SIGPLAN ’91 Conference on Programming Language
+     297–302, Salt Lake City, UT, January 1984.                                  Design and Implementation, June 1991.
+ [6] P. Druschel, L. L. Peterson, and B. S. Davie. Experiences              [20] N. Ramsey and M. F. Fernandez. The New Jersey machine-
+     with a high-speed network adaptor: A software perspective.                  code toolkit. In 1995 Winter USENIX, December 1995.
+     In ACM Communication Architectures, Protocols, and Appli-
+     cations (SIGCOMM) 1994, pages 2–13, London, UK, August                 [21] V. Buch T. von Eicken, A. Basu and W. Vogels. U-Net: A
+     1994.                                                                       user-level network interface for parallel and distributed com-
+                                                                                 puting. In Proceedings of the Fifteenth ACM Symposium on
+ [7] A. Edwards, G. Watson, J. Lumley, D. Banks, C. Clamvokis,                   Operating Systems Principles, 1995.
+     and C. Dalton. User-space protocols deliver high performance           [22] C. A. Thekkath and H. M. Levy. Limits to low-latency com-
+     to applications on a low-cost Gb/s LAN. In ACM Communica-                   munication on high-speed networks. ACM Transactions on
+     tion Architectures, Protocols, and Applications (SIGCOMM)                   Computer Systems, 11(2):179–203, May 1993.
+     1994, pages 14–24, London, UK, August 1994.
+                                                                            [23] C. A. Thekkath, H. M. Levy, and E. D. Lazowska. Separating
+ [8] D. R. Engler. VCODE: a retargetable, extensible, very                       data and control transfer in distributed operating systems. In
+     fast dynamic code generation system. In Proceedings                         Sixth International Conference on Architecture Support for
+     of the SIGPLAN ’96 Conference on Programming Lan-                           Programming Languages and Operating Systems, pages 2–
+     guage Design and Implementation, Philadelphia, PA, May                      11, October 1994.
+     1996. http://www.pdos.lcs.mit.edu/˜engler/
+     vcode.html.                                                            [24] C.A. Thekkath, H.M. Levy, and E.D. Lazowska. Efficient
+                                                                                 support for multicomputing on ATM networks. Technical
+ [9] D. R. Engler, W. C. Hsieh, and M. F. Kaashoek. ‘C: A lan-                   Report TR93-04-03, University of Washington, April 1993.
+     guage for high-level, efficient, and machine-independent dy-
+     namic code generation. In Proceedings of the 22th Annual               [25] C.A. Thekkath, T.D. Nguyen, E. Moy, and E. Lazowska. Im-
+     Symposium on Principles of Programming Languages, 1995.                     plementing network protocols at user level. In ACM Com-
+                                                                                 munication Architectures, Protocols, and Applications (SIG-
+[10] D. R. Engler, M. F. Kaashoek, and J. O’Toole Jr. Exoker-                    COMM) 1993, pages 64–73, San Francisco, California, Octo-
+     nel: an operating system architecture for application-specific              ber 1993.
+     resource management. In Proceedings of the Fifteenth ACM               [26] T. von Eicken, A. Basu, and V. Buch. Low-latency commu-
+     Symposium on Operating Systems Principles, pages 251–266,                   nication over ATM networks using active messages. IEEE
+     Copper Mountain Resort, Colorado, December 1995.                            Micro, pages 46–53, February 1995.
+[11] D.R. Engler and T.A. Proebsting. DCG: An efficient, re-                [27] M. Yahara, B. Bershad, C. Maeda, and E. Moss. Efficient
+     targetable dynamic code generation system. Proceedings of                   packet demultiplexing for multiple endpoints and large mes-
+     ASPLOS-VI, pages 263–272, October 1994.                                     sages. In Proceedings of the Winter 1994 USENIX Conference,
+                                                                                 1994.
+
+
+                                                                        7
+

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "kind": "senate",
+  "description": "Planning session: quickly decides the next job and agrees its design document.",
+  "config": {
+    "version": 1,
+    "princeps": {
+      "name": "Princeps senatus",
+      "model": "pool/gpt-6.1-sol",
+      "prompt": "You are a neutral chair with no technical constituency of your own. Make sure every senator is heard, that disagreements are stated precisely and tested against evidence from the project, the specifications and the exokernel literature, and that the decision follows from the strongest supported arguments rather than from the majority or the most confident voice. This is a short working session. The Head of Engineering and the Head of QA lead on how the job will be built and tested; the others contribute where their expertise applies. Keep the discussion brief and focused on the next job. State the decision, its rationale and the dissent that remains."
+    },
+    "senators": [
+      {
+        "name": "OS Architect",
+        "agent": "os-architect",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Hardware Expert",
+        "agent": "hardware-expert",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Engineering",
+        "agent": "head-of-engineering",
+        "model": "pool/gpt-6.1-sol",
+        "prompt": "In this session you lead, with the Head of QA, on how the next job will be built: scope, sequencing and the concrete changes."
+      },
+      {
+        "name": "Head of QA",
+        "agent": "head-of-qa",
+        "model": "pool/gpt-6.1-sol",
+        "prompt": "In this session you lead, with the Head of Engineering, on how the next job will be tested and what evidence will show it is done."
+      },
+      {
+        "name": "Head of Performance",
+        "agent": "head-of-performance",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Anti-Bloatware",
+        "agent": "head-of-anti-bloat",
+        "model": "pool/gpt-6.1-sol"
+      }
+    ]
+  }
+}

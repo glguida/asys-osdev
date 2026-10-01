@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "resume": {"type": "string", "enum": ["architecture", "test_plan", "cycle", "plenary", "abort"], "title": "Where should the flow continue?"},
+    "comments": {"type": "string", "title": "Guidance for that step"}
+  },
+  "required": ["resume"],
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "flow-recovery",
+    "model": "pool/gpt-6.1-sol"
+  },
+  "description": "Routes a failed step of the OS development flow to the step that should resume, or escalates to a human."
+}

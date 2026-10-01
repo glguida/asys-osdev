@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "name": "osdev",
+  "egress": true,
+  "types": {
+    "program": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-program"
+      ]
+    },
+    "os-architect": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/os-architect.json"
+      ]
+    },
+    "hardware-expert": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/hardware-expert.json"
+      ]
+    },
+    "head-of-engineering": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/head-of-engineering.json"
+      ]
+    },
+    "head-of-qa": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/head-of-qa.json"
+      ]
+    },
+    "head-of-performance": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/head-of-performance.json"
+      ]
+    },
+    "head-of-anti-bloat": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/head-of-anti-bloat.json"
+      ]
+    },
+    "senate": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate.json"
+      ]
+    },
+    "human": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-human"
+      ]
+    },
+    "goal": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/goal.json"
+      ]
+    },
+    "flow-recovery": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/flow-recovery.json"
+      ]
+    },
+    "senate-architecture": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate-architecture.json"
+      ]
+    },
+    "senate-test-plan": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate-test-plan.json"
+      ]
+    },
+    "senate-planning": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate-planning.json"
+      ]
+    },
+    "senate-review": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate-review.json"
+      ]
+    },
+    "senate-plenary": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate-plenary.json"
+      ]
+    },
+    "git": {
+      "command": [
+        "python3",
+        "/opt/asys/environment/programs/git_step.py"
+      ],
+      "env": {
+        "GIT_AUTHOR_NAME": "asys osdev flow",
+        "GIT_AUTHOR_EMAIL": "osdev-flow@localhost",
+        "GIT_COMMITTER_NAME": "asys osdev flow",
+        "GIT_COMMITTER_EMAIL": "osdev-flow@localhost"
+      },
+      "timeout": 600
+    }
+  }
+}

@@ -1,0 +1,321 @@
+                 Exterminate All Operating System Abstractions
+                                 Dawson R. Engler       M. Frans Kaashoek
+                                      fengler, kaashoekg@lcs.mit.edu
+                                   MIT Laboratory for Computer Science
+                                          545 Technology Square
+                                          Cambridge, MA 02139
+
+                      Abstract                               a release away: it is fundamentally impossible to ab-
+    The defining tragedy of the operating systems             stract resources in a way that is useful to all appli-
+community has been the definition of an operating sys-        cations and to implement these abstractions in a way
+tem as software that both multiplexes and abstracts          that is ecient across disparate needs. For some rea-
+physical resources. The view that the OS should ab-          son, OS implementors have decided that this simple
+stract the hardware is based on the assumption that it       law does not apply to them and that, indeed, they
+is possible both to define abstractions that are appro-       are compelled to indulge in the wholesale abstraction
+priate for all areas and to implement them to perform        of hardware resources. In this position paper we con-
+eciently in all situations. We believe that the fallacy     centrate on the following characteristics of operating
+of this quixotic goal is self-evident, and that the op-      systems that have been built in this manner: they are
+erating system problems of the last two decades (poor        complex and large, which decreases system reliability
+performance, poor reliability, poor adaptability, and        and aggressively discourages change; they are overly
+in flexibility) can be traced back to it. The solution we      general, which makes their use expensive and makes
+propose is simple: complete elimination of operating         their implementation consume significant fractions of
+system abstractions by lowering the operating system         machine resources; and they enforce a high-level inter-
+interface to the hardware level.                             face, which precludes the ecient implementation of
+                                                             new abstractions outside of the OS.
+1 Introduction
+     Throughout the history of computer science there            We believe, therefore, that the attempt to pro-
+has been a fairly constant opinion that \current" oper-      vide OS abstractions is the root of all operating sys-
+ating systems are inadequate [4, 7, 9, 11, 15, 18]. The      tem problems. We contend that these problems can
+literature is rife with specific examples that describe       be solved directly by the systematic elimination of OS
+the cost of the inappropriate, inecient abstractions        abstractions, lowering the interface enforced by the OS
+peddled by operating systems [2, 4, 12, 13, 18, 23, 24].     to a level close to the raw hardware. It is important
+This situation has persisted for the last three decades,     to note that we favor abstractions, but they should
+and has survived numerous assaults (object-oriented          be implemented outside the operating system so that
+operating systems and micro-kernels are two of the           applications can select among a myriad of implemen-
+more popular movements). As a general rule, a con-           tations or, if necessary, \roll their own".
+cept that cannot be realized after such a long period
+of time should be reexamined.
+     The standard definition of an operating system is            The structure of this paper is as follows: Sec-
+software that securely multiplexes and abstracts phys-       tion 2 expounds our ideology; Section 3 outlines spe-
+ical resources. We believe that this definition, speci -      ci c features of our target operating system structure;
+cally its view of the OS as an abstractor of hardware,       and Section 4 explores some of the advantages of this
+is crippling and wrong. The basic intuition behind           new OS structure and some common misconceptions in
+our arguments is that no OS abstraction can t all            such a structure. We discuss related work in Section 5
+applications. This is not a characteristic that is just      and conclude in Section 6.
+  This work was supported in part by the Advanced Research
+Projects Agency under contracts N00014-94-1-0985 and by a
+NSF National Young Investigator Award.
+2 The Jeremiad                                               Poor performance OS abstractions are often
+     For this paper, we define the operating system as        overly general, as they provide any feature needed by
+any piece of software that the application cannot either     any reasonable application and all applications must
+change or avoid. User-level device drivers, privileged       use a given OS abstraction. Applications that do not
+servers, and kernels are all included by this definition.     need this feature pay unnecessary overhead [1, 18]. In
+The goal of the OS designer should be to push the in-        the case of garbage collectors or database systems this
+terface this defines to the level of the raw hardware.        cost can amount to an order of magnitude. Addition-
+We define application-level software as software that         ally, simply using a given feature is costly, since time
+can be changed and/or avoided by any application;            must be spent selecting from a myriad of options [18].
+this is in contrast to software at user-level (or in user-   Furthermore, the mere existence of OS abstractions
+space), which may require very high privileges to adapt      consumes significant amounts of main memory, cache
+or replace (e.g., replacing a device driver often requires   space, TLB space, and cycles, which could be used by
+\root" privileges). Much of the xation micro-kernels         applications to perform useful work.
+have with putting pieces of the kernel into user-space            Finally, any OS implementation makes trade-o s:
+comes from a confusion between user and application          whether to use a hierarchical or inverted page-table,
+level.                                                       whether to optimize for frequent reads or random
+     The thesis of this position paper is that the op-       writes, whether to have copy-on-write or a large page
+erating system should not abstract physical resources.       size, etc. Unfortunately, any trade-o penalizes appli-
+What the OS should do is what no other piece of soft-        cations that were not anticipated or neglected by the
+ware can do: safely multiplex physical resources. The        OS designer. However, this situation is easily avoid-
+motivation for this decision can be placed in the con-       able: if the OS does not abstract resources, it does not
+text of the \end-to-end" argument [21]: OS abstrac-          have to such make trade-o s.
+tions are reduntant or of little value when compared
+to the cost of providing them. We explore these issues
+more thoroughly below:
+                                                             Poor flexibility The poor reliability, poor adapt-
+Poor reliability Abstracting resources (e.g., pro-           ability, and poor performance of operating systems
+viding a full-featured virtual memory system with            would be acceptable if applications could just ignore
+copy-on-write, memory-mapped I/O and other treats)           the operating system and implement their own ab-
+requires a large amount of complex, multi-threaded           stractions. Unfortunately, the high-level nature of cur-
+code. These characteristics, along with dynamic stor-        rent operating system interfaces makes this approach
+age allocation and management and the paging of ker-         infeasible. The best that applications can do is em-
+nel data structures and code, greatly decrease the re-       ulate the desired feature on top of existing OS ab-
+liability the system.                                        stractions; unfortunately, such emulation is typically
+                                                             clumsy, complicated, and prohibitively expensive. For
+Poor adaptability The OS is large and compli-                example, once the application has no access to the raw
+cated. Changing large, complicated pieces of software        disk interface, database records must be emulated on
+is hard. This creates a disincentive to incorporate new      top of les. The list of such examples is painfully long
+features or tune existing ones. Furthermore, since all       and continues to grow [2, 4, 13, 18, 23, 24].
+applications \depend on" the OS, change is not local-
+ized. This provides an additional discouragement to
+adapting the OS implementation. Finally, only the                 In short, operating systems are complex, frag-
+kernel architect can incorporate new changes, which          ile, in flexible, and slow, because they have dabbled
+further restricts adaptability. The e ects of this can       in the practice of providing a general purpose vir-
+be seen directly: how many of the good ideas in the          tual machine. The operating system is basically hard-
+last 10 SOSP conferences have been incorporated (or          ware masquerading as software: it cannot be changed,
+allowed at application-level) by any operating system        all applications must use it, and the information it
+other than the one they were developed on? For exam-         hides cannot be recovered. Operating system design-
+ple, what operating systems support multiple protec-         ers should learn what hardware designers learned a
+tion domains within a single-address space, ecient          decade ago during the transition from CISC to RISC:
+IPC, or ecient and flexible virtual memory primi-             hardware should provide primitives, not high-level ab-
+tives?                                                       stractions.
+3 The Solution: Eliminate OS Ab-                            calls, and those that write to privileged state (e.g.,
+  stractions                                                TLB write instructions) are associated with access
+                                                            checks. Exception propagation is done in a direct man-
+     We contend that the solution to all of these di-      ner by (perhaps) saving a few scratch registers in some
+culties is straightforward: eliminate operating system      agreed-upon location in application-space and then
+abstractions. The OS should only export physical re-        jumping to an application-specified PC-address [24].
+sources in a secure manner; it should not be in the              Of course, all of these operations can be sped up
+business of presenting a pretty, machine-independent        by downloading application code into the kernel [4, 9]
+interface to applications.                                  or using a \software TLB" [14, 3] to cache translations.
+     In this section we give a general sketch of an OS      These implementation techniques aside, the full func-
+structure that embodies a \abstraction-free", low-level     tionality provided by the underlying hardware should
+interface. We call such a structure an exokernel. The       be exposed (e.g., reference bits, the ability to disable
+sole function of an exokernel is to allocate, deallocate,   caching on a page-basis, the ability to use different
+and multiplex physical resources in a secure way. The       pagesizes, etc.).
+resources exported by this kernel are those provided by
+the underlying hardware: physical memory (divided
+into pages), the CPU (divided into time-slices), disk       Process The only state that the operating system
+memory (divided into blocks), DMA channels, I/O de-         needs to define a process is a set of exception program
+vices, translation look-aside bu er, addressing context     counters that the operating system will jump to on an
+identi ers, and interrupt/trap events.                      exception, an associated address space, and both pro-
+     Security is enforced by associating every resource     logue and epilogue code to be called when a time-slice
+usage or binding point with a guard that checks access      is initiated and expires. Placing context-switching
+privileges. For example, as one of the steps in pre-        under application control (through the application-
+serving memory integrity, the kernel guards the TLB         defined prologue and epilogue code) enables techniques
+by checking any virtual-to-physical mappings given by       such as moving the program counter out of critical sec-
+applications before they are inserted into the TLB.         tions at context-switch time [6].
+     The kernel can optimize global performance by its
+control over the allocation and revocation of physi-        IPC The basic functionality required by IPC is sim-
+cal resources. With this control it can enforce pro-        ply the transfer of a PC from one protection domain
+portional sharing, or what resources are allocated to       to an agreed-upon value in another, with the donation
+which domains.                                              of the current time-slice, installation of the called do-
+     To make these examples concrete, we detail what        main's exception context, and an indication of which
+address spaces, time-slices, and IPC might look like        process initiated the call. This extremely lightweight,
+under the regime we have described. The details we          synchronous, cross-domain calling mechanism imple-
+present are highly machine-specific, but the general         ments the bare-minimum required by any IPC mecha-
+outline should be similar across machines; the main         nism, allowing the application to pay for just the func-
+goal in each is to answer the question: what is the         tionality that it requires. For example, a client that
+minimum functionality that the kernel needs to pro-         trusts a server may allow the server to save and re-
+vide in order for this primitive to be implemented in       store the registers it needs, instead of saving the entire
+application space?                                          register le on every IPC. Since the machine state of
+                                                            current RISC machines is growing larger [19], this can
+                                                            be crucial for good performance.
+Address space To allow application-implemented
+virtual memory, the OS must support bootstrapping
+of page-tables, allocation of physical memory, modi -       This is far from a complete enumeration of all system
+cation of mapping hardware (e.g., TLB), and excep-          objects (for example, we neglect disks and devices),
+tion propagation. The simplest bootstrapping mech-          but should give a feel for what level of functionality
+anism is to provide a small number of \guaranteed           the OS is required to provide. The bare minimum is
+mappings" that can be used to map the page-table and        much removed from the policy-laden, overly general,
+exception handling code. Physical memory allocation         and restrictive implementations surrounding us today.
+should support requests for a given page number (en-        (A more complete discussion and evaluation of the ex-
+abling such techniques as \page-coloring" for improved      okernel methodology and a prototype exokernel can be
+caching [5]). Privileged instructions (e.g., ush, probe,    found in Engler [10]; our prototype exokernel performs
+and modify instructions) can be wrapped in systems          10-100 times faster than a mature monolithic system
+in operations such as as IPC, exception forwarding,         Eciency Resource management has been put into
+and virtual memory manipulations.)                          application space, allowing implementations to ex-
+4 Discussion                                                ploit application-specific knowledge in making trade-
+                                                            o s (e.g., optimizing for reads or random writes, sparse
+    We discuss how our proposed structure solves the        address spaces, etc.); furthermore, since implementa-
+traditional problems of reliability, eciency, and ex-      tions can be highly specialized, they can eliminate
+tensibility; these points have at their core the simple     the cost of generality present in most OS abstrac-
+principle that the most ecient, reliable, and extensi-     tions. From an engineering standpoint, this struc-
+ble OS abstraction is the one that is not there.            ture allows a broad pool of non-kernel architects to
+                                                            implement alternative implementations. Since the en-
+                                                            tire system does not depend on these implementations,
+Reliability Exposing hardware resources safely and          application-level operating systems can be readily ex-
+eciently requires neither sophisticated algorithms or      perimented with and altered by non-privileged imple-
+many lines of code. As a result, the operating system       mentors; furthermore, these operating systems will be
+can be small and readily understood: both of these          readily used, since they do not have to be used by
+properties aid correctness.                                 the entire system (and hence trusted in a very real
+     Additionally, the application-level implementation     sense). Finally, since all operations can occur in the
+of operating system services is likely to be much sim-      same address space, the current contortions to mini-
+pler in structure and smaller in realization than a tra-    mize the cross-domain costs of TLB pollution/misses,
+ditional, general-purpose OS. For example, it does not      system call traps, and context-switches are completely
+have to multithread among multiple malicious enti-          obviated.
+ties, or worry about peculiar characteristics of supervi-
+sor mode (e.g., the particular locking constraints that
+arise within the kernel to guard against loss of inter-     Flexibility Applications can now implement system
+rupts and deadlock). Finally, since this application        objects in ways that are fundamentally impossible
+OS \trusts" the application, it can use application         on traditional operating systems. Radical page-table
+state directly and simply; a general-purpose OS is con-     structures, process abstractions, address spaces, and
+stantly in the business of copying user data, guarding        lesystems can be constructed safely and eciently on
+against illegal addresses, and checking for validity. All   top of this structure. We expect that this freedom
+of these concerns can be ignored in an application-level    will enable a broad class of applications that are not
+OS since, if the application does something wrong, the      feasible under current operating systems.
+damage is to itself only.                                        The ability of application-level operating systems
+                                                            to support powerful, ecient, and unusual abstrac-
+                                                            tions cannot be overemphasized. By allowing any ap-
+Adaptability The kernel's simplicity enables easy           plication writer to implement fundamental system ob-
+modification. Furthermore, since most of the operat-         jects, the degree, ease, and pervasiveness of experi-
+ing system code is used simply to track ownership and       mentation and utilization of the results of this experi-
+access rights, there is not much that needs to be tuned.    mentation can dramatically increase.
+     By allowing application-level implementations, we
+have removed the dependence of the entire system on
+the implementation. In other words, by localizing ex-            We discuss some frequently asked questions about
+periments within a single operating system subsystem        the methodology we have proposed.
+(library or server), applications that wish to use the           Won't executables become large? As a prac-
+new feature can link it in. Those that do not, do not       tical matter, libraries that implement traditional ab-
+need to. Traditional operating systems occupy the un-       stractions can be sizable. However, shared libraries
+fortunate position of having every application depend       can be used to combat this problem. They have been
+on their correct and appropriate implementation. This       used successfully in equivalent situations. For exam-
+\depends on" relationship drastically limits the degree     ple, the X-window libraries are typically dynamically
+to which experimentation can be carried out and the         linked. In the worst case, servers can be used to mul-
+results used.                                               tiplex code, data and threads of control.
+     A more prosaic example of improved adaptability            Doesn't this cause portability problems?
+is that the implementation can now occur in applica-        There are two levels of portability that must be pro-
+tion space, with access to user-development environ-        vided, machine portability and OS interface porta-
+ments (e.g., debuggers and pro lers).                       bility. The first may be achieved in the standard
+manner: namely, a low-level layer that hides machine       they have made is in determining how an OS should
+dependence. The second can be achieved through             get this way. It should become small not by enforc-
+application-level implementations of industry stan-        ing a limited set of high-level operations, but instead,
+dards (e.g., POSIX). The important difference is that       through the systematic elimination of all operating
+the implementation of these layers are now in appli-       system abstractions in order to expose the hardware to
+cation space and, therefore, can be replaced without       application-level software; from this primal mud, ap-
+special privileges, simplifying the addition and devel-    plications can craft their own abstractions, chosen for
+opment of new standards and features not anticipated       appropriateness and eciency, rather than make do
+by kernel architects.                                      with abstractions force-fed under duress. With micro-
+    What happens to the system structure                   kernels, applications can have even fewer options than
+when any application can define its own inter-              with monolithic ones.
+faces? As language, GUI and standard library imple-             Two current OS research e orts, the Cache Ker-
+mentors can attest, preventing a Babel of incompatible     nel [7] and Aegis [9, 10], adhere closely to our precepts
+interfaces is simple: define standards and conventions.     for a model operating system. Further experience is
+As we argue in this position paper, the e ects of hard-    needed to see if a low-level kernel interface is indeed
+wiring high-level interfaces into the system structure     the panacea that can cure current operating system
+are a convincing demonstration that such an approach       troubles.
+is not the right way to define a standard. In closing,           The open operating system for a single-user ma-
+while an exokernel allows the possibility of a chaotic     chine is motived by similar observations as the ones
+system it also allows the creation of a harmonious, el-    that motivate the exokernel [16]. However, the ap-
+egant one as well: a system whose structure does not       proach taken to extensibility taken is different. The
+have to be anticipated by kernel architects.               exokernel's main task is secure multiplexing, while in
+     How can system state be shared? Trusted               the open operating system protection is not an issue at
+(or at least highly accountable) servers can be used       all, since it relies on the fact it is designed for a single-
+to manage shared, fault-isolated caches of system ob-      user machine. In addition, the exokernel attempts to
+jects such as le-bu ers. This methodology is has been      define no OS abstractions, while in the open operat-
+explored in the context of microkernels; many of the       ing systems the le system and communications are
+lessons learned are directly applicable to exokernels.     standardized. Despite these di erences, one can view
+5 Related Work                                             the exokernel architecture as an instance of an open
+                                                           operating system.
+     Micro-kernels were originally intended to solve            The interface provided by the VM/370 OS [8] is
+many of the problems we have listed. Unfortunately,        very similar to what would be provided by our ideal
+they have oundered for a number of reasons. First,         OS: namely, the raw hardware. However, the impor-
+while they allow replacing of device drivers and high-     tant difference is that VM/370 provides this interface
+level servers, such operations typically can only be       by virtualizing the entire base-machine. Since this ma-
+done by trusted applications. Second, they are still in    chine can be quite complicated and expensive to em-
+the business of providing a virtual machine to applica-    ulate faithfully, virtualization can result in a complex
+tions. The high-level interface that they enforce pre-     and inecient OS. In contrast, our approach exports
+cludes much of the experimentation that we desire (the     hardware resources rather than emulates them, allow-
+reader is invited to compare the primitives described in   ing an ecient and fast implementation.
+Section 3 to current micro-kernels). Third, their rigid
+interface tends to be rudimentary when compared to              OS extensibility has a long history [15, 20]. Cur-
+their monolithic counterparts; they often achieve sim-     rent attempts include SPIN [4], Bridge [17], and
+plicity by implementing only a small set of high-level     Vino [22]. Some of the techniques used in these sys-
+OS abstractions. For example, a micro-kernel may           tems, such as type-safe languages and software fault-
+have achieved simplicity by dropping support for mmap,     isolation [25], are also applicable to exokernels. The
+memory-mapped I/O, and full-featured virtual mem-          commercial world has long looked at this issue in the
+ory, but not given alternative mechanisms to imple-        form of unsafe dynamically loaded device drivers.
+ment the functionality these features provided: micro-     6 Conclusions
+kernels can give applications even less control over
+hardware resources than a monolithic system does.               Two decades ago, Lampson summarized the state
+     Microkernel architects have realized that an op-      of the art; unfortunately, his characterization is still
+erating system should be small; the crucial mistake        apt:
+      A considerable amount of bitter experience                [9] D. R. Engler, M. F. Kaashoek, and J. O'Toole. The
+      in the design of operating systems has been                   operating system kernel as a secure programmable
+      accumulated in the last few years, both by                    machine. In Proceedings of the Sixth SIGOPS Euro-
+      the designers of the systems which are cur-                   pean Workshop, September 1994.
+      rently in use and by those who have been                 [10] Dawson R. Engler. The design and implementation of
+      forced to use them. As a result, many peo-                    a prototype exokernel operating system. Master's the-
+                                                                    sis, MIT, 545 Technology Square, Boston MA 02139,
+      ple have been led to the conclusion that                      February 1995.
+      some radical changes must be made, both                  [11] Per Brinch Hansen. The nucleus of a multipro-
+      in the way we think about the functions of                    gramming system. Communications of the ACM,
+      operating systems and in the way they are                     13(4):238{241, April 1970.
+      implemented [15].                                        [12] J.H. Hartman, A.B. Montz, David Mosberger, S.W.
+                                                                    O'Malley, L.L. Peterson, and T.A. Proebsting. Scout:
+We believe that these problems can be solved by low-                A communication-oriented operating system. Techni-
+ering the interface to the hardware that is enforced by             cal Report TR 94-20, University of Arizona, Tucson,
+the kernel: namely, by exporting physical resources to              AZ, June 1994.
+applications directly. Management and abstraction of           [13] K. Harty and D.R. Cheriton. Application-controlled
+these resources can then be specialized for simplicity,             physical memory using external page-cache manage-
+eciency, and appropriateness.                                      ment. In Proceedings of the Fifth International Con-
+     The low-level interface of our proposed OS struc-              ference on ASPLOS, pages 187{199, October 1992.
+ture would have allowed the bulk of operating system           [14] J. Huck and J. Hays. Architectural support for trans-
+research in the last two decades to have been done eas-             lation table management in large address space ma-
+                                                                    chines. In Proceedings of the 19th International Sym-
+ily and safely in application space. Furthermore, the               posium on Computer Architecture, 1992.
+impact of this research could have been much greater,          [15] B.W. Lampson. On reliable and extendable operating
+since the implementation of its ideas could have been               systems. State of the Art Report, 1, 1971.
+localized to specific applications.                             [16] B.W. Lampson and R.F. Sproull. An open operat-
+References                                                          ing system for a single-user machine. Proceedings of
+                                                                    the Seventh ACM Symposium on Operating Systems
+ [1] T.E. Anderson, B.N. Bershad, E.D. Lazowska, and                Principles, pages 98{105, 1979.
+     H.M. Levy. Scheduler activations: E ective kernel
+     support for the user-level management of parallelism.     [17] Steven Lucco. High-performance microkernel systems
+     In Proc. Thirteenth Symposium on Operating System              (abstract). In Proc. of the first Symp. on OSDI,
+     Principles, pages 95{109, October 1991.                        November 1994.
+ [2] A.W. Appel and K. Li. Virtual memory primitives for       [18] H. Massalin. Synthesis: an ecient implementation
+     user programs. In Proceedings of the Fourth Interna-           of fundamental operating system services. PhD thesis,
+     tional Conference on ASPLOS, pages 96{107, Santa               Columbia University, 1992.
+     Clara, CA, April 1991.                                    [19] J. K. Ousterhout. Why aren't operating systems get-
+ [3] K. Bala, M.F. Kaashoek, and W.E. Weihl. Soft-                  ting faster as fast as hardware? In Proc. Summer
+     ware prefetching and caching for translation lookaside         Usenix, pages 247{256, June 1990.
+     bu ers. In Proceedings of the First Symposium on          [20] D.D. Redell, Y.K. Dalal, T.R. Horsley, H.C. Lauer,
+     OSDI, pages 243{253, June 1994.                                W.C. Lynch, P.R. McJones, H.G. Murray, and S.C.
+ [4] B.N. Bershad, C. Chambers, S. Eggers, C. Maeda,                Purcell. Pilot: An operating system for a personal
+     D. McNamee, P. Pardyak, S. Savage, and E. Sirer.               computer. Communications of the ACM, 23(2):81{92,
+     SPIN - an extensible microkernel for application-              February 1980.
+     specific operating system services. TR 94-03-03, Univ.     [21] J.H. Saltzer, D.P. Reed, and D.D. Clark. End-to-end
+     of Washington, February 1994.                                  arguments in system design. Proc. of the Fifth SOSP,
+ [5] B.N. Bershad, D. Lee, T.H. Romer, and J.B. Chen.               pages 509{512, 1981.
+     Avoiding con ict misses dynamically in large direct-      [22] Margo Seltzer et al. An introduction to the architec-
+     mapped caches. In ASPLOS-VI, 1994.                             ture of the VINO kernel, November 1994.
+ [6] B.N. Bershad, D.D. Redell, and J.R. Ellis. Fast mu-       [23] M. Stonebraker. Operating system support for
+     tual exclusion for uniprocessors. In Proc. of the Conf.        database management. CACM, 24(7):412{418, July
+     on Architectural Support for Programming Languages             1981.
+     and Operating Systems, pages 223{237, October 1992.       [24] C. A. Thekkath and Henry M. Levy. Hardware and
+ [7] D. Cheriton and K. Duda. A caching model of operat-            software support for ecient exception handling. In
+     ing system kernel functionality. In Proceedings of the         Sixth Conf. on ASPLOS, 1994.
+     Sixth SIGOPS European Workshop, September 1994.           [25] R. Wahbe, S. Lucco, T. Anderson, and S. Graham.
+ [8] R. J. Creasy. The origin of the VM/370 time-                   Ecient software-based fault isolation. In Proc. of
+     sharing system. IBM J. Research and Development,               Fourteenth SOSP, pages 203{216, 1993.
+     25(5):483{490, September 1981.
+

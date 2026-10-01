@@ -1,0 +1,389 @@
+===== https://pdos.csail.mit.edu/archive/exo/ (fetched 2026-10-01)
+
+
+   MIT Exokernel Operating System
+
+MIT Exokernel Operating System
+
+Putting the Application in Control.
+An operating system is interposed between applications and the physical
+hardware. Therefore, its structure has a dramatic impact on the performance
+and the scope of applications that can be built on it. Since its inception,
+the field of operating systems has been attempting to identify an appropriate
+structure: previous attempts include the familiar monolithic and micro-kernel
+operating systems as well as more exotic language-based and virtual machine
+operating systems. Exokernels dramatically depart from this previous work.
+An exokernel eliminates the notion that an operating system should provide
+abstractions on which applications are built. Instead, it concentrates
+solely on securely multiplexing the raw hardware: from basic hardware primitives,
+application-level libraries and servers can directly implement traditional
+operating system abstractions, specialized for appropriateness and speed.
+
+Structure of an exokernel system. Applications use their
+own Library Operating System (LibOS) which
+
+in turn use the exokernel to allocate and deallcate hardware
+resources.
+
+We have built several exokernel based systems. The newest exokernel
+is XOK, which runs on PC hardware, and ExOS, our first library
+operating system (libos). The ExOS library provides a user-level and
+extensible implementation of an UNIX operating system. Most UNIX
+applications like gcc, perl, apache, tcsh, and telnet compile and work
+without changes using ExOS. Further, measurements of application
+performance show that ExOS performs at least as well as OpenBSD and
+FreeBSD and much better when using specialized libos's. For example,
+the Cheetah web server built on top of XOK performs eight times faster
+than NCSA or Harvest and three to four times faster than IIS running
+on Windows NT Enterprise Edition.   
+
+Check out a [/exo/exo-slides/sld001.htm] slide-show
+about exokernels on our [/exo/docs.html] documentation
+page.
+
+An alpha-release of our exopc [/exo/distrib.html] distribution 
+is currently available. It contains all source and tools required to build
+and boot the entire system on a pc. We hope that by making the exopc distribution
+publicly available we can interest the 'net community at large in developing
+and using exokernels.
+
+For more information on exokernels and related projects see the home
+pages of the  [/] Parallel and Distributed
+Operating Systems group at the [http://web.mit.edu] MIT
+[http://www.lcs.mit.edu] Lab for Computer Science. Papers can
+be found at [/PDOS-papers.html] the
+PDOS papers page. 
+
+Last updated by Marc 5, 1998.
+
+
+===== https://pdos.csail.mit.edu/archive/exo/docs.html (fetched 2026-10-01)
+
+
+Documentation
+
+Here's all the relevant information we have about exokernels and the exopc
+distribution.
+
+A series of [/exo/exo-slides/sld001.htm] slides
+from Dawson's traveling road show
+
+The first and second SOSP exokernel  [/PDOS-papers.html] papers
+
+The exopc [/exo/exo-guide/guide.html] installation
+guide.
+
+The exopc [/exo/exo-internals/internals.html] internals
+guide.
+
+PhD and Masters Theses relating to exokernels [/exo/theses/index.html] theses
+
+
+===== https://pdos.csail.mit.edu/archive/exo/theses/index.html (fetched 2026-10-01)
+
+
+   MIT Exokernel Theses
+
+MIT Exokernel Theses
+
+Robert Grimm; May 1996; MS thesis: Exodisk: maximizing application control over storage management
+([/exo/theses/rgrimm/thesis.ps] PS,
+ [/exo/theses/rgrimm/thesis.ps.gz] PS.GZ)
+
+Deborah Wallach; January 1997; PhD thesis: High-Performance Application-Specific Networking
+([/exo/theses/kerr/thesis.ps] PS,
+ [/exo/theses/kerr/thesis.ps.gz] PS.GZ)
+
+Tom Pinckney; January 1997; MS thesis: Hierarchial Untrusted Resource Management
+([/exo/theses/pinckney/thesis.ps] PS,
+ [/exo/theses/pinckney/thesis.ps.gz] PS.GZ,
+ [/exo/theses/pinckney/thesis.dvi] DVI)
+
+Tom Pinckney; February 1997; MS thesis: Operating System Extensibility Through Event Capture
+([/exo/theses/pinckney/proposal.ps] PS,
+ [/exo/theses/pinckney/proposal.ps.gz] PS.GZ,
+ [/exo/theses/pinckney/proposal.dvi] DVI) and
+
+Hector Briceno Pulido; February 1997; MS thesis: Decentralizing UNIX Abstractions in the Exokernel Architecture
+([/exo/theses/hbriceno/thesis.ps] PS,
+ [/exo/theses/hbriceno/thesis.ps.gz] PS.GZ)
+
+Dough Wyatt; August 1997; MS thesis: Shared Libraries in an Exokernel Operating System
+([/exo/theses/dwyatt/thesis.ps] PS,
+ [/exo/theses/dwyatt/thesis.ps.gz] PS.GZ)
+
+John Jannotti; February 1998; MS thesis: Applying Exokernel Principles to Conventional Operating Systems
+([/exo/theses/jj/thesis.ps] PS,
+ [/exo/theses/jj/thesis.ps.gz] PS.GZ)
+
+Kenneth M. Mackenzie; February 1998; PhD thesis: An Efficient Virtual
+Network Interface in the FUGU Scalable Workstation
+([/exo/theses/kenmac/thesis.ps.gz] PS.GZ)
+
+George Candea; May 1998; M.Eng. thesis; Flexible and Efficient Sharing of Protected Abstractions
+([/exo/theses/candea/thesis.ps] PS,
+ [/exo/theses/candea/thesis.ps.gz] PS.GZ,
+ [/exo/theses/candea/thesis.dvi] DVI)
+
+Dawson Engler; October 1998; PhD thesis: The Exokernel Operating System Architecture
+([/exo/theses/engler/thesis.ps] PS,
+ [/exo/theses/engler/thesis.ps.gz] PS.GZ,
+ [/exo/theses/engler/thesis.dvi] DVI)
+
+Charles Coffing; May 1999; M.Eng. thesis: An x86 Protected Mode Virtual Machine Monitor for the MIT exokernel
+([/exo/theses/coffing/coffing.ps] PS,
+ [/exo/theses/coffing/coffing.ps.gz] PS.GZ)
+
+Benjie Chen; Jan 2000; M.Eng. thesis: Multiprocessing with the Exokernel Operating System
+([/exo/theses/benjie/meng.ps] PS,
+ [/exo/theses/benjie/meng.ps.gz] PS.GZ)
+
+MIT Secure Filesystem Theses
+
+David Mazieres; August 1997; M.Eng. thesis: Security and Decentralized Control in the SFS Global File System
+([/exo/theses/dm/thesis.ps] PS,
+ [/exo/theses/dm/thesis.ps.gz] PS.GZ)
+
+Danilo Almeida; May 1998; M.Eng. thesis: Framework for Implementing File Systems in Windows NT
+([/exo/theses/almeida/thesis.ps] PS,
+ [/exo/theses/almeida/thesis.ps.gz] PS.GZ)
+
+Matt Rimer; June 1999; M.Eng. thesis: The Secure File System Under Windows NT
+([/exo/theses/rimer/thesis.ps] PS,
+ [/exo/theses/rimer/thesis.ps.gz] PS.GZ)
+
+
+===== https://pdos.csail.mit.edu/~engler/ (fetched 2026-10-01)
+
+Dawson Engler
+
+ Dawson Engler 
+
+Hi.
+
+I am a member of Frans Kaashoek's group,
+[/] 
+Parallel and Distributed Operating Systems.
+I spend a lot of my time hacking exokernels and
+[http://www.pdos.lcs.mit.edu/~engler/pldi96-abstract.html] 
+dynamic code generation systems.  I also work 
+on the problem of pulling application-level semantics and control
+into [magik-abstract.html] compilers.  
+
+My curriculum vitae is available
+[cv.ps] 
+here. 
+
+I used to have a fetish involving oil, stages, and weights (since
+outgrown).  This [jr-calif.html] picture is from the 1991
+Jr. California, a "drug-free-for-life" competition, where I finished
+2nd.  A reliance on the body's natural supply of androgenic aids
+combined with over-exuberant dieting translated into muscles only
+slightly larger than those of an olympic marathon runner.  
+
+[cool-people.html] Cool computer-related people and places.
+
+ Some Recent Papers 
+
+ Exokernel Papers 
+
+[sosp-97.ps] 
+Application Performance and Flexibility on Exokernel Systems,
+  M. Frans Kaashoek, Dawson R. Engler, Gregory R. Ganger,
+  H'ector M. Brice~no, Russell Hunt, David Mazi`eres, Thomas Pinckney,
+  Robert Grimm, John Jannotti, and Kenneth Mackenzie,
+  Proceedings of the Fifteenth ACM Symposium on
+  Operating Systems Principles (SOSP).  October, 1997. 
+
+This is the best exokernel paper ever written. It has real application
+performance and a cool use of deterministic turing machines that lets
+an exokernel trust applications to track what they own without
+understanding how they do so.  Slides are available [sosp97-talk.ps] 
+here. 
+
+[sosp-95.ps] 
+Exokernel: An Operating System Architecture for Application-Level Resource Management,
+Dawson R. Engler, M. Frans Kaashoek and James W. O'Toole
+
+This paper appeared in SOSP95 ([exo-sosp-talk.ps]  slides are
+available here).  It is the most detailed description of
+what an exokernel is and has the most recent numbers.  It is also
+rather dense.  A more long-winded version of this paper is available in
+the form of [msthesis.ps]  my masters thesis  (though the
+material is about 6 months behind that in the SOSP paper).  
+
+[hotos-jeremiad.ps] 
+Exterminate All Operating System Abstractions,
+Dawson R. Engler and M. Frans Kaashoek
+
+This is a flamy paper describing the philosophical underpinnings of the
+exokernel approach.  It appeared in HotOS-V
+
+[serverOS-sigops96.ps] 
+Server Operating Systems,
+by
+[http://www.pdos.lcs.mit.edu/~kaashoek/] M. Frans Kaashoek,
+[http://www.pdos.lcs.mit.edu/~engler/]  Dawson R. Engler,
+[http://www.pdos.lcs.mit.edu/~ganger/] Gregory R. Ganger,
+and [http://www.pdos.lcs.mit.edu/~kerr/]  Deborah A. Wallach. 
+This paper appears in the 1996 SIGOPS European Workshop,
+September 9-11, 1996.
+
+The following position papers give a somewhat dated overview of the 
+exokernel project; we are currently implementing a prototype exokernel called
+Aegis.
+
+[avm.ps] 
+AVM: Application-level Virtual Memory,
+Dawson R. Engler, Sandeep Gupta and M. Frans Kaashoek
+
+This paper gives a brief motivation for and description of application-level
+virtual memory.  It appeared in HotOS-V
+
+[osdi-exo.ps] 
+The Exokernel Approach to Operating System Extensibility,
+
+Dawson R. Engler and M. Frans Kaashoek and James W. O'Toole Jr.
+
+This 1-page precis of the exokernel project appeared in the Proceedings of
+First Symposium on Operating System Design and Implementation (OSDI) 
+
+[xsigops.ps] 
+The Operating System Kernel as a Secure Programmable Machine, 
+
+Dawson R. Engler and M. Frans Kaashoek and James W. O'Toole Jr.
+
+This is a later version of a position paper that appears in the Proceedings
+of the Sixth SIGOPS European Workshop, 1994.  This version appears in
+the OSR Special Issue on Extensible Operating Systems.  (The exokernel
+philosophy it presents is somewhat out-of-date.)
+
+ Incorporating application semantics and control into compilation 
+
+Magik is a system developed to incorporate application semantics (such
+as the meaning of library interfaces and data structures) into the
+compiler, thereby allowing it to both optimize and error check them to
+the same degree as language constructs.  Magik also allows programmers
+to easily add extensions to the compiler.  Since these extensions have
+full access to the symbol table, the compiler IR, and data flow
+information they can perform operations (such as structure member
+profiling) expensive or infeasible by other means.  For an abstract,
+click [magik-abstract.html] here; the full paper (which
+appeared in the First Conference on Domain-specific Languages) is 
+[magik.ps]  here.
+
+The following papers discuss two dynamic code generation systems and a
+language designed to support high-level and efficient specification of
+dynamically generated code.
+
+ vcode: fast portable dynamic code generation 
+
+[vcode-pldi.ps] 
+vcode: a retargetable, extensible, very fast dynamic code generation system, 
+by Dawson R. Engler
+
+[http://www.pdos.lcs.mit.edu/~engler/pldi96-abstract.html] This paper 
+appeared in PLDI '96. Slides are available [vcode-pldi-talk.ps] 
+here .  
+
+vcode is a portable system to generate executable code at runtime.  It
+generates code in approximately 10 instructions per generated instruction,
+and is easily extendable by clients.   A tutorial describing it can be
+obtained by clicking [vcode-tutorial.ps]  here.  A beta
+version of the system is also [latest-vcode-release.tar.Z]  available.
+To get on the vcode mailing list, please email engler@lcs.mit.edu.
+[http://www.pdos.lcs.mit.edu/~engler/pldi96-abstract.html] Click
+here for a bit more information.
+
+ `C: a language for high-level, fast dynamic code generation 
+
+[pldi-tickc.ps] 
+`C: A Language for High-Level, Efficient, and Machine-independent
+Dynamic Code Generation,
+by Dawson R. Engler, Wilson C. Hsieh and M. Frans Kaashoek.
+This paper appeared in POPL 1996.  Slides are available 
+[tickc-popl-talk.ps]  here. 
+
+[tickc-pldi-submit.ps] 
+tcc: A System for Fast, Flexible, and High-level Dynamic Code Generation
+by Massimiliano Poletto, Dawson R. Engler and M. Frans Kaashoek.
+This paper will appear in PLDI 1997. A preliminary release of the tcc
+compiler can be obtained from 
+[http:/tickc] the tickc homepage.
+
+[wcsss.ps] 
+tcc: A Template-Based Compiler for `C
+by Massimiliano Poletto, Dawson R. Engler and M. Frans Kaashoek.
+This paper appeared in WCSSS 1996.  A preliminary release of the tcc
+compiler can be obtained from
+[http:/tickc] the tickc homepage.
+
+ DCG 
+
+[dcg.ps] 
+DCG: An Efficient, Retargetable Dynamic Code Generator, 
+
+by Dawson R. Engler and Todd A. Proebsting.
+This paper appeared in ASPLOS 94 ([dcg-asplos-talk.ps] 
+click here for slides). The system it describes
+has been superseded by [pldi96-abstract.html]  vcode.
+
+The following three papers discuss a network
+system built on top of the exokernel.
+
+[sigcomm96.ps] 
+ASHs:  Application-specific handlers for high-performance messaging,
+by
+[http://www.pdos.lcs.mit.edu/~kerr/] 
+Deborah A. Wallach,
+[http://www.pdos.lcs.mit.edu/~engler/] 
+Dawson R. Engler,
+and [http://www.pdos.lcs.mit.edu/~kaashoek/] 
+M. Frans Kaashoek. 
+
+The paper appeared in 
+[http://www.acm.org/sigcomm/sigcomm96/index.html] 
+ACM Communication Architectures, Protocols, and Applications (SIGCOMM '96).
+Portions of its implementation are more thoroughly explored in:
+
+[ash-osdi.ps] 
+Design and Implementation of a Modular, Flexible, and Fast System for
+Dynamic Protocol Composition,
+by
+[http://www.pdos.lcs.mit.edu/~engler/] 
+Dawson R. Engler,
+[http://www.pdos.lcs.mit.edu/~kerr/] 
+Deborah A. Wallach,
+and [http://www.pdos.lcs.mit.edu/~kaashoek/] 
+M. Frans Kaashoek.  
+
+[dpf-sigcomm96.ps] 
+DPF: Fast, Flexible Message Demultiplexing using Dynamic Code Generation,
+by
+[http://www.pdos.lcs.mit.edu/~engler/] 
+Dawson R. Engler
+and [http://www.pdos.lcs.mit.edu/~kaashoek/] 
+M. Frans Kaashoek. 
+
+The paper appeared in 
+[http://www.acm.org/sigcomm/sigcomm96/index.html] 
+ACM Communication Architectures, Protocols, and Applications (SIGCOMM '96). 
+Slides from the talk are available [dpf-talk.ps]  here. 
+A beta release of the system is available [dpf.tar.gz]  here.
+DPF is described more fully 
+[dpf.html]  here.
+
+The following two papers were written when I was at University of Arizona
+
+[filaments-93.ps] 
+The Design and Implementation of Efficient Thread-Based Parallelism, 
+by Dawson R. Engler.
+
+[fine-grain-93.ps] 
+Filaments: Efficient Support for Fine-Grain Parallelism, 
+by Dawson R. Engler, Gregory R. Andrews, and David K. Lowenthal.
+
+[s.ps] 
+
+engler@lcs.mit.edu
+

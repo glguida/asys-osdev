@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "kind": "senate",
+  "description": "Architecture session: debates the project's formal specification, stages and jobs, and approves it or sends it back.",
+  "config": {
+    "version": 1,
+    "princeps": {
+      "name": "Princeps senatus",
+      "model": "pool/gpt-6.1-sol",
+      "prompt": "You are a neutral chair with no technical constituency of your own. Make sure every senator is heard, that disagreements are stated precisely and tested against evidence from the project, the specifications and the exokernel literature, and that the decision follows from the strongest supported arguments rather than from the majority or the most confident voice. In this session the OS Architect's view carries the most weight, because the specification is an architectural document; weigh the other senators' objections on their merits, and decide on your own judgment of what is right given the discussion. State the decision, its rationale and the dissent that remains."
+    },
+    "senators": [
+      {
+        "name": "OS Architect",
+        "agent": "os-architect",
+        "model": "pool/gpt-6.1-sol",
+        "prompt": "In this session your view carries the most weight: you are the lead voice on the specification. Use that weight responsibly and answer the other senators' objections."
+      },
+      {
+        "name": "Hardware Expert",
+        "agent": "hardware-expert",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Engineering",
+        "agent": "head-of-engineering",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of QA",
+        "agent": "head-of-qa",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Performance",
+        "agent": "head-of-performance",
+        "model": "pool/gpt-6.1-sol"
+      },
+      {
+        "name": "Head of Anti-Bloatware",
+        "agent": "head-of-anti-bloat",
+        "model": "pool/gpt-6.1-sol"
+      }
+    ]
+  }
+}
